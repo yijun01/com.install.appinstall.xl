@@ -6,9 +6,9 @@ id=com.install.appinstall.xl
 versionCode=36
 # 模块版本名称（与VersionName一致）
 versionName=2.0.0
-# 作者名称（填写你的昵称/账号）
+# 作者名称
 author=小淋
-# 模块描述（简要说明核心功能）
+# 模块描述
 description=伪造应用安装状态（已安装/未安装），拦截检测退出，自动伪造权限，支持悬浮窗快捷配置
 # 支持的Xposed框架（LSPosed/LSPatch/EdXposed均兼容）
 supportFramework=LSPosed, LSPatch，EdXposed
