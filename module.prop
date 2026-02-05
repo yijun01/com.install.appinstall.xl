@@ -1,5 +1,5 @@
 # 模块名称
-name=伪造安装
+name=伪造安装模块
 # 模块包名
 id=com.install.appinstall.xl
 # 模块版本号（与VersionCode一致）
@@ -14,6 +14,6 @@ description=伪造应用安装状态（已安装/未安装），拦截检测退�
 supportFramework=LSPosed, LSPatch，EdXposed
 # 适配系统版本
 minApi=21（Android 5.0）
-maxApi=33（Android 16）
+maxApi=36（Android 16）
 # 模块更新链接
 updateUrl=https://github.com/yijun01/com.install.appinstall.xl/releases
