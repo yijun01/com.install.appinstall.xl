@@ -1,0 +1,19 @@
+# 模块名称
+name=伪造安装
+# 模块包名
+id=com.install.appinstall.xl
+# 模块版本号（与VersionCode一致）
+versionCode=36
+# 模块版本名称（与VersionName一致）
+versionName=2.0.0
+# 作者名称（填写你的昵称/账号）
+author=小淋
+# 模块描述（简要说明核心功能）
+description=伪造应用安装状态（已安装/未安装），拦截检测退出，自动伪造权限，支持悬浮窗快捷配置
+# 支持的Xposed框架（LSPosed/LSPatch/EdXposed均兼容）
+supportFramework=LSPosed, LSPatch，EdXposed
+# 适配系统版本
+minApi=21（Android 5.0）
+maxApi=33（Android 16）
+# 模块更新链接
+updateUrl=https://github.com/yijun01/com.install.appinstall.xl/releases
