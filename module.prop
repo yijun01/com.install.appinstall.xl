@@ -3,9 +3,9 @@ name=伪造安装模块
 # 模块包名
 id=com.install.appinstall.xl
 # 模块版本号（与VersionCode一致）
-versionCode=36
+versionCode=58
 # 模块版本名称（与VersionName一致）
-versionName=2.0.0
+versionName=2.0.8
 # 作者名称
 author=小淋
 # 模块描述
