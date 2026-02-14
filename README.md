@@ -118,5 +118,4 @@ https://github.com/yijun01/com.install.appinstall.xl
 ![](https://img.shields.io/github/downloads/yijun01/com.install.appinstall.xl/total?logo=github&label=Total%20Downloads&labelColor=2dba4e&color=2dba4e)
 
 ⭐ **Star** ⭐ 
-![]
-(https://starchart.cc/yijun01/com.install.appinstall.xl.svg?theme=dark)
+![](https://starchart.cc/yijun01/com.install.appinstall.xl.svg?theme=dark)
