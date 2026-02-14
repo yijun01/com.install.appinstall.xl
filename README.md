@@ -47,7 +47,7 @@
 
 ## 安装教程
 ### 1. 模块安装（LSPosed）
-1. 下载最新版本 APK：[Releases 页面]
+1. 下载最新版APK：[Releases 页面](https://github.com/yijun01/com.install.appinstall.xl/releases)
 2. 安装 APK 后，打开 LSPosed → 模块 → 找到“伪造安装”模块 → 启用模块。
 3. 勾选需要适配的目标应用（仅勾选需要的应用，请勿勾选系统相关应用）。
 4. 重启目标应用（或重启设备），模块生效。
