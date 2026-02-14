@@ -1,5 +1,6 @@
 # com.install.appinstall.xl
 伪造安装 XP 模块
+![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white) ![Xposed](https://img.shields.io/badge/Xposed-Module-34a853?logo=android&logoColor=white) ![LSPosed](https://img.shields.io/badge/LSPosed-Supported-34a853?logoColor=white) ![GitHub](https://img.shields.io/badge/Open-Source-34a853?logo=github&logoColor=white)
 # 伪造安装 XP 模块
 这是一个基于Android系统底层架构进行hook技术的应用防护模块。
 核心作用是：
@@ -107,3 +108,15 @@ A：1. 模块并未对分身应用进行适配，不建议作用于分身应用
 
 作者主页(项目)：
 https://github.com/yijun01/com.install.appinstall.xl
+
+---
+# 📊 项目统计
+
+📦 **总下载量**  
+![GitHub 总下载](https://img.shields.io/github/downloads/yijun01/com.install.appinstall.xl/total?logo=github&label=Total%20Downloads&labelColor=2dba4e&color=2dba4e)
+
+🚀 **最新版下载**  
+![Latest 下载](https://img.shields.io/github/downloads/yijun01/com.install.appinstall.xl/latest/total?logo=android&label=Latest%20Downloads&labelColor=2dba4e&color=50e3c2)
+
+⭐ **Star 趋势**  
+![Star 趋势](https://starchart.cc/yijun01/com.install.appinstall.xl.svg?theme=dark)
