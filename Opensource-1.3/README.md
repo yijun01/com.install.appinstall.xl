@@ -16,7 +16,7 @@
 
 项目路径：
 
-将整个“installCheck”文件夹存放在/storage/emulated/0/AideProjects/下使用AIDE Pro进行打卡即可编译使用。
+将整个“installCheck”文件夹存放在/storage/emulated/0/AideProjects/下使用安卓AIDE Pro进行打开即可编译使用。
 如有错误可咨询Ai修复。
 
 如:/storage/emulated/0/AideProjects/installCheck
