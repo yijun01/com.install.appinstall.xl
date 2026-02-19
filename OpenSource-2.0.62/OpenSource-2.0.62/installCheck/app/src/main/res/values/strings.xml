@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">伪造安装模块</string>
+    <string name="xposed_activated">"Xposed: Activated"</string>
+    <string name="xposed_unactivated">"Xposed: Unactivated"</string>
+    <string name="xposed_xiaolin">"#移除强制安装第三方应用\n#严禁任何商业活动仅个人免费使用！\n#永恒之蓝(小淋)"
+	</string>
+</resources>
