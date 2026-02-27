@@ -1,7 +1,7 @@
 # com.install.appinstall.xl
 伪造安装 XP 模块
 
-![](https://img.shields.io/github/v/release/Xposed-Modules-Repo/com.fuck.risk?style=flat-square&logo=android&logoColor=white&color=3DDC84)
+![](https://img.shields.io/github/v/release/yijun01/com.fuck.risk?style=flat-square&logo=android&logoColor=white&color=3DDC84)
 ![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white) ![Xposed](https://img.shields.io/badge/Xposed-Module-34a853?logo=android&logoColor=white) ![LSPosed](https://img.shields.io/badge/LSPosed-Supported-34a853?logoColor=white) ![LSPatch](https://img.shields.io/badge/LSPatch-Supported-34a853?logoColor=white) ![Root](https://img.shields.io/badge/Root-Supported-34a853?logo=lock&logoColor=white) ![GitHub](https://img.shields.io/badge/GitHub-OpenSource-34a853?logo=github&logoColor=white)
 
 # 伪造安装 XP 模块
