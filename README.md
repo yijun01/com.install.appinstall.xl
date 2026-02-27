@@ -1,8 +1,8 @@
 # com.install.appinstall.xl
 伪造安装 XP 模块
 
-![](https://img.shields.io/github/v/release/yijun01/com.install.appinstall.xl?style=flat-square&logo=android&logoColor=white&color=3DDC84)
-![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white) ![Xposed](https://img.shields.io/badge/Xposed-Module-34a853?logo=android&logoColor=white) ![LSPosed](https://img.shields.io/badge/LSPosed-Supported-34a853?logoColor=white) ![LSPatch](https://img.shields.io/badge/LSPatch-Supported-34a853?logoColor=white) ![Root](https://img.shields.io/badge/Root-Supported-34a853?logo=lock&logoColor=white) ![GitHub](https://img.shields.io/badge/GitHub-OpenSource-34a853?logo=github&logoColor=white)
+[![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl) [![Xposed](https://img.shields.io/badge/Xposed-Module-34a853?logo=android&logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl) [![LSPosed](https://img.shields.io/badge/LSPosed-Supported-34a853?logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl) [![LSPatch](https://img.shields.io/badge/LSPatch-Supported-34a853?logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl) [![Root](https://img.shields.io/badge/Root-Supported-34a853?logo=lock&logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl) [![GitHub](https://img.shields.io/badge/GitHub-OpenSource-34a853?logo=github&logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl)
+[![](https://img.shields.io/github/v/release/yijun01/com.install.appinstall.xl?style=flat-square&logo=android&logoColor=white&color=3DDC84)](https://github.com/yijun01/com.install.appinstall.xl)
 
 # 伪造安装 XP 模块
 这是一个基于Android系统底层架构进行hook技术的应用防护模块。
@@ -117,8 +117,8 @@ https://github.com/yijun01/com.install.appinstall.xl
 
 📦 **Download**  📦
 
-![](https://img.shields.io/github/downloads/yijun01/com.install.appinstall.xl/total?logo=github&label=Total%20Downloads&labelColor=2dba4e&color=2dba4e)
+[![](https://img.shields.io/github/downloads/yijun01/com.install.appinstall.xl/total?logo=github&label=Total%20Downloads&labelColor=2dba4e&color=2dba4e)](https://github.com/yijun01/com.install.appinstall.xl)
 
 ⭐ **Star** ⭐ 
 
-![](https://starchart.cc/yijun01/com.install.appinstall.xl.svg?theme=dark)
+[![](https://starchart.cc/yijun01/com.install.appinstall.xl.svg?theme=dark)](https://github.com/yijun01/com.install.appinstall.xl)
