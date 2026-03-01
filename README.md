@@ -50,7 +50,7 @@
 
 ## 🛠 安装教程
 ### 1. ROOT方案（LSPosed/EdXposed）
-1. 下载最新版APK：[Releases 页面](https://github.com/Xposed-Modules-Repo/com.install.appinstall.xl/releases)
+1. 下载最新版APK：[Releases 页面](https://github.com/yijun01/com.install.appinstall.xl/releases)
 2. 安装APK后，打开LSPosed → 模块 → 找到「伪造安装模块」→ 开启模块
 3. 勾选需要适配的**目标应用**（仅勾选第三方应用，禁止勾选系统应用/分身应用）
 4. 重启目标应用（或重启设备），模块即可生效
