@@ -1,21 +1,10 @@
-# com.install.appinstall.xl
-伪造安装 XP 模块
+# 伪造安装模块（com.install.appinstall.xl）
+基于Android底层Hook技术的应用防护XP模块，核心实现应用安装状态伪造，拦截恶意安装检测，绕过应用强制安装限制，保护设备应用列表隐私。
+
 
 [![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl) [![Xposed](https://img.shields.io/badge/Xposed-Module-34a853?logo=android&logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl) [![LSPosed](https://img.shields.io/badge/LSPosed-Supported-34a853?logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl) [![LSPatch](https://img.shields.io/badge/LSPatch-Supported-34a853?logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl) [![Root](https://img.shields.io/badge/Root-Supported-34a853?logo=lock&logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl) [![GitHub](https://img.shields.io/badge/GitHub-OpenSource-34a853?logo=github&logoColor=white)](https://github.com/yijun01/com.install.appinstall.xl)
 [![](https://img.shields.io/github/v/release/yijun01/com.install.appinstall.xl?style=flat-square&logo=android&logoColor=white&color=3DDC84)](https://github.com/yijun01/com.install.appinstall.xl)
 
-# 伪造安装 XP 模块
-这是一个基于Android系统底层架构进行hook技术的应用防护模块。
-核心作用是：
-一款可伪造应用安装状态模块，解决应用因检测特定包而限制功能或强制退出的问题，
-拦截其他应用的安装检测行为，并返回伪造的安装信息，防止指定应用恶意查询已安装的应用。
-
-#举个栗子：
-你打开了软件A，软件A需要你强制下载一个应用才能使用，
-你不知道这个应用是否安全或者压根不想安装，那么你就可以使用“伪造安装模块”，
-使用之后软件A就会认为你已经安装啦，之后就可以愉快玩耍软件A~
-
----
 
 ### 核心作用
 拦截应用的PackageManager/文件/命令行/网络等多维度安装检测，返回自定义伪造结果（已安装/未安装），防止应用因检测特定包而限制功能、强制退出或强制推送下载。
