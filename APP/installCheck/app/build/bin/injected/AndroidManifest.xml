@@ -2,12 +2,15 @@
 <manifest
 	xmlns:android="http://schemas.android.com/apk/res/android"
 	package="com.install.appinstall.xl"
-	android:versionCode="13"
-	android:versionName="1.3">
+	android:versionCode="58"
+	android:versionName="2.0.8">
 
 	<uses-sdk
 		android:minSdkVersion="21"
-		android:targetSdkVersion="26"/>
+		android:targetSdkVersion="28"/>
+
+	<uses-permission
+		android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
 	<application
 		android:icon="@drawable/ic_launcher"
@@ -46,7 +49,7 @@
 
 		<meta-data
 			android:name="xposeddescription"
-			android:value="移除强制安装第三方应用"/>
+			android:value="@string/xposed_xiaolin"/>
 
 		<meta-data
 			android:name="xposedminversion"

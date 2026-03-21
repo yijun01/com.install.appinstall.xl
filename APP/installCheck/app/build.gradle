@@ -7,9 +7,9 @@ android {
     defaultConfig {
         applicationId "com.install.appinstall.xl"
         minSdkVersion 21
-        targetSdkVersion 26
-        versionCode 13
-        versionName "1.3"
+        targetSdkVersion 28
+        versionCode 58
+        versionName "2.0.8"
     }
 
     buildTypes {

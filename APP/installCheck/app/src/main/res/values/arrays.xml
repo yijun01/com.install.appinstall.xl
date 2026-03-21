@@ -3,6 +3,7 @@
 	
     <string-array name="xposed_scope">
         <!--<item>package_name</item>-->
+        <item>com.xl.appazcs</item>
     </string-array>
 	
 </resources>
