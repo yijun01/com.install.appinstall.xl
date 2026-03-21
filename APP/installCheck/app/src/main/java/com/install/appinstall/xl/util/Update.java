@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
@@ -39,6 +40,7 @@ import java.util.concurrent.Executors;
 
 /**
  * 更新检查工具类（最终版 + 版本信息头部含更新时间 + 发布页置底）
+ * 添加手动检查防频繁点击（10秒限制）和自动检测频率限制（10分钟）
  */
 public class Update {
 
@@ -49,13 +51,55 @@ public class Update {
 
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
 
+    // ========== 新增：频率限制常量 ==========
+    private static final long MANUAL_INTERVAL = 10000; // 手动点击间隔 10 秒
+    private static final long AUTO_INTERVAL = 600000; // 自动检查间隔10分钟
+    private static long lastManualCheck = 0; // 上次手动检查时间（内存）
+    private static final String PREF_LAST_AUTO_CHECK = "last_auto_check_time"; // SharedPreferences 键
+
+    /**
+     * 手动检查更新（按钮点击调用）
+     */
     public static void checkForUpdate(Activity activity) {
+        if (activity == null || activity.isFinishing()) return;
+
+        long now = System.currentTimeMillis();
+        if (now - lastManualCheck < MANUAL_INTERVAL) {
+            ToastUtil.show(activity, "操作太频繁，请稍后再试");
+            return;
+        }
+        lastManualCheck = now;
+
+        performUpdateCheck(activity);
+    }
+
+    /**
+     * 自动检查更新（如 onCreate 中调用），带持久化频率限制
+     */
+    public static void checkForUpdateAuto(Activity activity) {
+        if (activity == null || activity.isFinishing()) return;
+
+        SharedPreferences prefs = activity.getSharedPreferences("update_prefs", Context.MODE_PRIVATE);
+        long lastAuto = prefs.getLong(PREF_LAST_AUTO_CHECK, 0);
+        long now = System.currentTimeMillis();
+        if (now - lastAuto < AUTO_INTERVAL) {
+            return; // 未超过间隔，不执行检查
+        }
+        prefs.edit().putLong(PREF_LAST_AUTO_CHECK, now).apply();
+
+        performUpdateCheck(activity);
+    }
+
+    /**
+     * 实际的更新检查逻辑（从原 checkForUpdate 抽取）
+     */
+    private static void performUpdateCheck(Activity activity) {
         if (activity == null || activity.isFinishing()) return;
 
         try {
             boolean isEmbedded = !MODULE_PACKAGE.equals(activity.getPackageName()) && isMainActivityExists(activity);
             if (isEmbedded) {
-                performUpdateCheck(activity);
+                doUpdateCheck(activity);
                 return;
             }
 
@@ -65,11 +109,13 @@ public class Update {
                 return;
             }
 
-            performUpdateCheck(activity);
+            doUpdateCheck(activity);
         } catch (Throwable t) {
             ToastUtil.show(activity, "检查更新异常: " + t.getMessage());
         }
     }
+
+    // ========== 以下为原 checkForUpdate 中的辅助方法，无变化 ==========
 
     private static boolean isMainActivityExists(Activity activity) {
         try {
@@ -83,11 +129,8 @@ public class Update {
         }
     }
 
-    // ----------------------------------------------------------------------
-    // 更新检查核心
-    // ----------------------------------------------------------------------
-
-    private static void performUpdateCheck(Activity activity) {
+    // 执行网络检查（原 checkForUpdate 的主体部分）
+    private static void doUpdateCheck(Activity activity) {
         if (!isNetworkAvailable(activity)) {
             ToastUtil.show(activity, "网络未连接，请检查后重试");
             return;
@@ -424,7 +467,7 @@ public class Update {
                     activity.startActivity(intent);
                     ToastUtil.show(activity, "获取新版本");
                 } else {
-                    ToastUtil.show(activity, "下载链接不安全，请手动访问发布页");
+                    ToastUtil.show(activity, "获取链接失败，请手动访问发布页");
                     Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(release.releaseUrl));
                     activity.startActivity(intent);
                 }

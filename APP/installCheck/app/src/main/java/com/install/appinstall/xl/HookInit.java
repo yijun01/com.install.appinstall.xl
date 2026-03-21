@@ -2413,8 +2413,8 @@ if (records != null && !records.isEmpty()) {
                                                                 Math.min(x, screenWidth - viewWidth - 10)
                                                         );
                                                         y = Math.max(
-                                                                50,
-                                                                Math.min(y, screenHeight - viewHeight - 100)
+                                                                150,
+                                                                Math.min(y, screenHeight - viewHeight - 250)
                                                         );
                                                     }
                                                     floatingView.setX(x);
@@ -3852,7 +3852,7 @@ private void clearAutoCapturedPackagesOnly(
                         if (viewWidth == 0) viewWidth = 200;
                         if (viewHeight == 0) viewHeight = 80;
                         newX = Math.max(10, Math.min(newX, screenWidth - viewWidth - 10));
-                        newY = Math.max(50, Math.min(newY, screenHeight - viewHeight - 100));
+                        newY = Math.max(150, Math.min(newY, screenHeight - viewHeight - 250));
                         v.setX(newX);
                         v.setY(newY);
                         // 移动时不保存文件，只在结束时保存
@@ -5192,19 +5192,21 @@ private AlertDialog createBoundedDialog(
 
     // 处理自定义视图：自动放入 ScrollView 以确保可滚动
     if (customView != null) {
-        // 如果 customView 已经有父布局，先移除（安全起见）
-        if (customView.getParent() != null) {
-            ((ViewGroup) customView.getParent()).removeView(customView);
-        }
-        ScrollView scrollView = new ScrollView(activity);
-        scrollView.setLayoutParams(new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-        scrollView.setFillViewport(true); // 允许内容填充视口，避免留白
-        scrollView.addView(customView);
-        builder.setView(scrollView);
-    } else if (message != null && !message.isEmpty()) {
+    // 移除原有父容器
+    if (customView.getParent() != null) {
+        ((ViewGroup) customView.getParent()).removeView(customView);
+    }
+    ScrollView scrollView = new ScrollView(activity);
+    scrollView.setVerticalScrollBarEnabled(false); // 隐藏垂直滚动条
+    scrollView.setHorizontalScrollBarEnabled(false); // 隐藏水平滚动条
+    scrollView.setLayoutParams(new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+    ));
+    scrollView.setFillViewport(true);
+    scrollView.addView(customView);
+    builder.setView(scrollView);
+} else if (message != null && !message.isEmpty()) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             builder.setMessage(Html.fromHtml(message, Html.FROM_HTML_MODE_LEGACY));
         } else {
@@ -5474,7 +5476,7 @@ private AlertDialog createBoundedDialog(
 
                             // 边界限制
                             float x = Math.max(10, Math.min(savedX, screenWidth - viewWidth - 10));
-                            float y = Math.max(50, Math.min(savedY, screenHeight - viewHeight - 100));
+                            float y = Math.max(150, Math.min(savedY, screenHeight - viewHeight - 250));
 
                             floatingView.setX(x);
                             floatingView.setY(y);
