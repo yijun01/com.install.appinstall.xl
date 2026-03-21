@@ -33,6 +33,10 @@ import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -49,26 +53,36 @@ import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
+import android.text.Html;
+import android.webkit.WebView;
+import android.webkit.JsResult;
 
 public class HookInit implements IXposedHookLoadPackage {
 
   private String currentTargetApp = "";
   private static final String MODULE_TAG = "InstallHook";
-  private static final ArrayList<String> globalCapturedPackages = new ArrayList<>();
+  private static final ArrayList<String> globalCapturedPackages =
+    new ArrayList<>();
   private final ArrayList<String> appCapturedPackages = new ArrayList<>();
 
+private Activity currentResumedActivity = null; //悬浮窗界面
   private Handler floatingTopHandler; // 定时置顶处理器
   private TextView currentFloatingView; // 当前悬浮窗视图
   // 配置存储
@@ -79,14 +93,26 @@ public class HookInit implements IXposedHookLoadPackage {
 
   // 拦截退出功能配置
   private static final Map<String, Boolean> blockExitMap = new HashMap<>();
-  private static final Map<String, List<InterceptPattern> > interceptPatternsMap = new HashMap<>();
+  private static final Map<
+    String,
+    List<InterceptPattern>
+  > interceptPatternsMap = new HashMap<>();
   // 类顶部新增：退出控制变量
   private boolean isExitPending = false; // 是否有等待处理的退出请求
   private String pendingExitMethod = ""; // 等待处理的退出方式（System.exit()/Process.killProcess()）
   private Object pendingExitParam = null; // 等待处理的退出参数
   private int isCurrentlyBlocking;
   private String blockText;
+  // 双击判定阈值（可调整，默认500毫秒）
+  private static final int DOUBLE_CLICK_THRESHOLD = 500;
+  private long lastClickTime = 0; // 上一次点击时间
+  private AlertDialog statusSwitchDialog; // 单击菜单弹窗引用
 
+// 用户自定义包名列表（独立存储，避免冲突）
+ private static final Map<String, List<String>> userDefinedPackagesMap = new HashMap<>();
+ // 新增：用户自定义排除包名列表（独立存储，与伪造包名区分）
+ private static final Map<String, List<String>> excludedPackagesMap = new HashMap<>();
+ 
   // ========== 完整的检测权限常量列表 ==========
   private static final String[] DETECTION_PERMISSIONS = {
     // 直接读取应用列表权限
@@ -168,33 +194,63 @@ public class HookInit implements IXposedHookLoadPackage {
 
   // 检测到的包名数据结构
   private static class DetectedPackages {
+
     List<String> installedPackages;
     List<String> notInstalledPackages;
     String patternHash;
+
     DetectedPackages() {
       installedPackages = new ArrayList<>();
       notInstalledPackages = new ArrayList<>();
     }
   }
+// 顶部加这一句
+//private Context mAppContext = null;
+//private boolean configLoaded 
+/*
 
-  @Override
-  public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
-    if (
-      lpparam.packageName.contains("com.google.android.webview") ||
-      lpparam.packageName.startsWith("com.google.android.webview:")
-    ) { // 过滤WebView子进程
-      //   log("✅ 强制跳过WebView相关包，避免启动干扰: " + lpparam.packageName);
-      return;
+@Override
+public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
+    
+    // ========== 🚀【分身专用】立即修复 so 路径（不等 attach）==========
+    try {
+        Context context = (Context) XposedHelpers.callStaticMethod(
+            XposedHelpers.findClass("android.app.ActivityThread", null),
+            "currentApplication"
+        );
+        if (context != null) {
+            ApplicationInfo ai = context.getApplicationInfo();
+            if (ai != null) {
+                // 强制重置 nativeLibraryDir，触发系统重新计算正确路径
+                XposedHelpers.setObjectField(ai, "nativeLibraryDir", ai.nativeLibraryDir);
+                //XposedBridge.log("[InstallHook] ✅ 分身主动修复 .so 路径: " + ai.nativeLibraryDir);
+            }
+        }
+    } catch (Throwable e) {
+        //XposedBridge.log("[InstallHook] ❌ 分身主动修复失败: " + e.getMessage());
     }
+
+    // 跳过分身系统类/核心类
+    if (
+        lpparam.packageName.contains("webview") ||
+        lpparam.packageName.contains("chromium") ||
+        lpparam.packageName.contains("android.") ||
+        lpparam.packageName.contains("com.android.") ||
+        lpparam.packageName.contains("system") ||
+        lpparam.packageName.contains("root")
+    ) {
+        return;
+    }
+    
     // Hook模块自身激活状态
     if ("com.install.appinstall.xl".equals(lpparam.packageName)) {
-      XposedHelpers.findAndHookMethod(
-        MainActivity.class.getName(),
-        lpparam.classLoader,
-        "isModuleActivated",
-        XC_MethodReplacement.returnConstant(true)
-      );
-      return;
+        XposedHelpers.findAndHookMethod(
+            MainActivity.class.getName(),
+            lpparam.classLoader,
+            "isModuleActivated",
+            XC_MethodReplacement.returnConstant(true)
+        );
+        return;
     }
 
     currentTargetApp = lpparam.packageName;
@@ -202,85 +258,520 @@ public class HookInit implements IXposedHookLoadPackage {
     log("开始Hook应用: " + currentTargetApp);
 
     if (isSystemPackage(currentTargetApp)) {
-      log("跳过系统应用: " + currentTargetApp);
-      return;
+        log("跳过系统应用: " + currentTargetApp);
+        return;
     }
 
     try {
-      // 加载配置文件
-      loadConfigFromFile();
+        // 仍然保留原来的 so 路径 Hook 作为兜底（不影响已修复的分身）
+        hookSoPathInApp(lpparam.classLoader);
+        
+        // 加载配置文件
+        loadConfigFromFile();
 
-      // 初始化配置
-      if (!installStatusMap.containsKey(currentTargetApp)) {
-        installStatusMap.put(currentTargetApp, true);
-      }
-      if (!floatingShownMap.containsKey(currentTargetApp)) {
-        floatingShownMap.put(currentTargetApp, true);
-      }
-      if (!blockExitMap.containsKey(currentTargetApp)) {
-        blockExitMap.put(currentTargetApp, false);
-      }
+        // 初始化配置
+        if (!installStatusMap.containsKey(currentTargetApp)) {
+            installStatusMap.put(currentTargetApp, true);
+        }
+        if (!floatingShownMap.containsKey(currentTargetApp)) {
+            floatingShownMap.put(currentTargetApp, true);
+        }
+        if (!blockExitMap.containsKey(currentTargetApp)) {
+            blockExitMap.put(currentTargetApp, false);
+        }
 
-      // 检查当前状态
-      Boolean currentStatus = installStatusMap.get(currentTargetApp);
-      boolean status = currentStatus != null ? currentStatus : true;
+        // 检查当前状态
+        Boolean currentStatus = installStatusMap.get(currentTargetApp);
+        boolean status = currentStatus != null ? currentStatus : true;
 
-      // 第1级：基础环境准备（防止崩溃）
-      // ========== 优先执行Bundle兜底Hook ==========
-      hookBundleGetString(lpparam.classLoader); 
-      hookBundleEmptyInstance(lpparam.classLoader);
+        // 第1级：基础环境准备（防止崩溃）
+        hookBundleGetString(lpparam.classLoader);
+        hookBundleEmptyInstance(lpparam.classLoader);
 
-      // 第2级：权限伪造（关键防御）
-      hookPackageUsageStatsPermission(lpparam.classLoader);
-      hookQueryAllPackagesPermission(lpparam.classLoader);
-      
-      // 第3级：系统底层Hook
-      hookSystemFileRead(); 
-      hookPackageManagerReflect();
-      
-      // 第4级：退出拦截（用户体验保障）
-      hookExitMethods(lpparam.classLoader);
-      hookIndirectExitMethods(lpparam.classLoader);
-      hookGlobalExitSources(lpparam.classLoader);
-      hookRunnableSystemExit(lpparam.classLoader);
+        // 第2级：权限伪造（关键防御）
+        hookPackageUsageStatsPermission(lpparam.classLoader);
+        hookQueryAllPackagesPermission(lpparam.classLoader);
 
-      // 第5级：包管理核心伪造（数据层）
-      hookKeyMethods(lpparam.classLoader);
-      hookOverloadMethods(lpparam.classLoader);
-      hookIsApplicationEnabled(lpparam.classLoader);
-      hookCheckPermission(lpparam.classLoader);
-      hookGetActivityInfo(lpparam.classLoader);
-      
-      // 第6级：Intent相关伪造（应用层）
-      hookQueryIntentActivities(lpparam.classLoader);
-      hookResolveActivity(lpparam.classLoader);
-      hookQueryIntentServices(lpparam.classLoader);
+        // 第3级：系统底层Hook
+        hookSystemFileRead();
+        hookPackageManagerReflect();
 
-      // 第7级：启动和访问控制
+        // 第4级：退出拦截（用户体验保障）
+        hookExitMethods(lpparam.classLoader);
+        hookIndirectExitMethods(lpparam.classLoader);
+        hookGlobalExitSources(lpparam.classLoader);
+        hookRunnableSystemExit(lpparam.classLoader);
+
+        // 第5级：包管理核心伪造（数据层）
+        hookKeyMethods(lpparam.classLoader);
+        hookOverloadMethods(lpparam.classLoader);
+        hookIsApplicationEnabled(lpparam.classLoader);
+        hookCheckPermission(lpparam.classLoader);
+        hookGetActivityInfo(lpparam.classLoader);
+        
+        // 第6级：Intent相关伪造（应用层）
+        hookQueryIntentActivities(lpparam.classLoader);
+        hookResolveActivity(lpparam.classLoader);
+        hookQueryIntentServices(lpparam.classLoader);
+        
+        // 第7级：启动拦截
+         // 第7级：启动和访问控制
+         /*
       hookGetLaunchIntentForPackage(lpparam.classLoader);
       hookCanStartActivity(lpparam.classLoader);
-      hookStartActivity(lpparam.classLoader);
+      */
+      //  hookStartActivity(lpparam.classLoader);
 
+      /*
       // 第8级：文件系统和命令行检测（底层检测）
       hookRuntimeExecMethods(lpparam.classLoader);
       hookFileSystemChecks(lpparam.classLoader);
       hookLibDirectoryChecks(lpparam.classLoader);
+      */
+      /*
+        // 第9级：ok网络和跨平台框架
+        hookOkHttp(lpparam.classLoader);
+        hookFlutterPackageInfoPlus(lpparam.classLoader);
+        hookFlutterAppInstalledChecker(lpparam.classLoader);
+        hookFileSystemInstallCheck(lpparam.classLoader);
+        hookReflectInstallCheck(lpparam.classLoader);
+        hookFlutterMethodChannelCheck(lpparam.classLoader);
 
-      // 第9级：ok网络和跨平台框架
-      hookOkHttp(lpparam.classLoader);
-      hookFlutterPackageInfoPlus(lpparam.classLoader);
-      hookFlutterAppInstalledChecker(lpparam.classLoader);
-      hookFileSystemInstallCheck(lpparam.classLoader);
-      hookReflectInstallCheck(lpparam.classLoader);
-      hookFlutterMethodChannelCheck(lpparam.classLoader);
-
-      // 第10级：UI和用户体验
-      hookDialogCancelableMethods(lpparam.classLoader);
-      hookActivityLifecycle(lpparam.classLoader);
+        // 第10级：UI和用户体验
+        hookDialogCancelableMethods(lpparam.classLoader);
+        hookActivityLifecycle(lpparam.classLoader);
     } catch (Throwable t) {
-      log("Hook失败: " + t);
+        log("Hook失败: " + t);
     }
-  }
+}
+*/
+/*
+*/
+
+@Override
+public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
+
+
+// ========== 🚨【WebView子线程崩溃专杀】==========
+try {
+    // Hook WebView 的所有子线程创建，直接吞掉空指针
+    XposedHelpers.findAndHookMethod(
+        "android.webkit.WebView",
+        null,
+        "onDraw",
+        android.graphics.Canvas.class,
+        new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                // 什么都不做，只是防止崩溃
+            }
+        }
+    );
+} catch (Throwable ignored) {}
+
+try {
+    // Hook Chromium 内核的崩溃点
+    XposedHelpers.findAndHookMethod(
+        "org.chromium.android_webview.AwContents",
+        null,
+        "destroy",
+        new XC_MethodReplacement() {
+            @Override
+            protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
+                return null; // 防止销毁时崩溃
+            }
+        }
+    );
+} catch (Throwable ignored) {}
+
+// ========== 🚨【终极暴力修复】Hook所有Bundle方法（可编译版）==========
+try {
+    Class<?> bundleClass = Class.forName("android.os.Bundle");
+    
+    // 使用 findAndHookMethod 逐个 Hook 关键方法，而不是 hookAllMethods
+    String[] bundleMethods = {
+        "getString", "getInt", "getBoolean", "getLong", 
+        "getDouble", "getFloat", "getBundle", "getSerializable",
+        "getParcelable", "containsKey"
+    };
+    
+    for (final String methodName : bundleMethods) {
+        try {
+            // Hook 单参数版本
+            XposedHelpers.findAndHookMethod(
+                bundleClass,
+                methodName,
+                String.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (param.thisObject == null) {
+                            setDefaultReturnValue(param);
+                            return;
+                        }
+                        // 检测Bundle是否可用
+                        try {
+                            ((Bundle) param.thisObject).hashCode();
+                        } catch (Throwable e) {
+                            setDefaultReturnValue(param);
+                        }
+                    }
+                    
+                    private void setDefaultReturnValue(MethodHookParam param) {
+                        if (methodName.equals("getString")) param.setResult("");
+                        else if (methodName.equals("getInt")) param.setResult(0);
+                        else if (methodName.equals("getBoolean")) param.setResult(false);
+                        else if (methodName.equals("getLong")) param.setResult(0L);
+                        else if (methodName.equals("getDouble")) param.setResult(0.0);
+                        else if (methodName.equals("getFloat")) param.setResult(0.0f);
+                        else if (methodName.equals("getBundle")) param.setResult(new Bundle());
+                        else param.setResult(null);
+                    }
+                }
+            );
+        } catch (Throwable ignored) {}
+        
+        try {
+            // Hook 双参数版本（带默认值）
+            XposedHelpers.findAndHookMethod(
+                bundleClass,
+                methodName,
+                String.class,
+                Object.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (param.thisObject == null) {
+                            param.setResult(param.args[1]);
+                            return;
+                        }
+                        try {
+                            Bundle b = (Bundle) param.thisObject;
+                            if (!b.containsKey((String) param.args[0])) {
+                                param.setResult(param.args[1]);
+                            }
+                        } catch (Throwable e) {
+                            param.setResult(param.args[1]);
+                        }
+                    }
+                }
+            );
+        } catch (Throwable ignored) {}
+    }
+    
+    // 特别处理 getString(String, String) 确保万无一失
+    try {
+        XposedHelpers.findAndHookMethod(
+            bundleClass,
+            "getString",
+            String.class,
+            String.class,
+            new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    if (param.thisObject == null) {
+                        param.setResult(param.args[1]);
+                        return;
+                    }
+                    try {
+                        Bundle b = (Bundle) param.thisObject;
+                        if (!b.containsKey((String) param.args[0])) {
+                            param.setResult(param.args[1]);
+                        }
+                    } catch (Throwable e) {
+                        param.setResult(param.args[1]);
+                    }
+                }
+            }
+        );
+    } catch (Throwable ignored) {}
+    
+ //   //XposedBridge.log("[InstallHook] ✅ Bundle暴力修复完成（可编译版）");
+    
+} catch (Throwable e) {
+    //XposedBridge.log("[InstallHook] ❌ Bundle暴力修复失败: " + e.getMessage());
+}
+
+// ========== 🚨【强制全局异常捕获】==========
+try {
+    // 先设置我们自己的Handler
+    final Thread.UncaughtExceptionHandler ourHandler = new Thread.UncaughtExceptionHandler() {
+        @Override
+        public void uncaughtException(Thread t, Throwable e) {
+            if (e instanceof NullPointerException) {
+                StackTraceElement[] stack = e.getStackTrace();
+                if (stack.length > 0) {
+                    String className = stack[0].getClassName();
+                    if (className.contains("Bundle") || 
+                        className.contains("PackageManager") ||
+                        className.contains("ContextImpl") ||
+                        className.contains("ApplicationPackageManager")) {
+                        //XposedBridge.log("[InstallHook] 💪 拦截崩溃: " + className + "." + stack[0].getMethodName());
+                        return;
+                    }
+                }
+            }
+            // 交给系统默认Handler
+            Thread.UncaughtExceptionHandler defaultHandler = 
+                Thread.getDefaultUncaughtExceptionHandler();
+            if (defaultHandler != null && defaultHandler != this) {
+                defaultHandler.uncaughtException(t, e);
+            }
+        }
+    };
+    
+    // 设置我们的Handler
+    Thread.setDefaultUncaughtExceptionHandler(ourHandler);
+    
+    // Hook setDefaultUncaughtExceptionHandler 防止被覆盖
+    XposedHelpers.findAndHookMethod(
+        "java.lang.Thread",
+        null,
+        "setDefaultUncaughtExceptionHandler",
+        Thread.UncaughtExceptionHandler.class,
+        new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                // 不允许覆盖我们的Handler
+                //XposedBridge.log("[InstallHook] ⚠️ 阻止应用设置自己的异常处理器");
+                param.setResult(null);
+            }
+        }
+    );
+    
+    //XposedBridge.log("[InstallHook] ✅ 强制全局异常捕获已启用");
+    
+} catch (Throwable e) {
+    //XposedBridge.log("[InstallHook] ❌ 强制异常捕获失败: " + e.getMessage());
+}
+
+    // ========== 🚨【终极兜底】任何线程的任何空指针都不崩溃 ==========
+try {
+    Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+        @Override
+        public void uncaughtException(Thread t, Throwable e) {
+            // 只处理空指针
+            if (e instanceof NullPointerException) {
+                StackTraceElement[] stack = e.getStackTrace();
+                if (stack.length > 0) {
+                    String className = stack[0].getClassName();
+                    // 只要是我们Hook的包，全部吞掉
+                    if (className.startsWith("android.os.Bundle") ||
+                        className.startsWith("android.content.pm") ||
+                        className.startsWith("android.app") ||
+                        className.contains("PackageManager")) {
+                        
+                        //XposedBridge.log("[InstallHook] 🛡️ 拦截子线程空指针: " +   className + "." + stack[0].getMethodName());
+                        return; // 不崩溃
+                    }
+                }
+            }
+            
+            // 其他崩溃交给系统
+            Thread.UncaughtExceptionHandler defaultHandler = 
+                Thread.getDefaultUncaughtExceptionHandler();
+            if (defaultHandler != null && defaultHandler != this) {
+                defaultHandler.uncaughtException(t, e);
+            }
+        }
+    });
+} catch (Throwable ignored) {}
+    
+    // ========== 🚨【分身核心修复1】获取真实Context和ClassLoader（必须最先执行）==========
+    Context appContext = null;
+    ClassLoader realClassLoader = null;
+    String realPackageName = lpparam.packageName; // 默认使用传入包名
+    
+    try {
+        // 通过ActivityThread获取当前应用的真实Context
+        appContext = (Context) XposedHelpers.callStaticMethod(
+            XposedHelpers.findClass("android.app.ActivityThread", null),
+            "currentApplication"
+        );
+        if (appContext != null) {
+            // 获取真实的ClassLoader（分身的classLoader是代理，必须用这个）
+            realClassLoader = appContext.getClassLoader();
+            // 获取真实的包名（分身传入的是分身包名，这里是宿主编译）
+            realPackageName = appContext.getPackageName();
+            
+            //XposedBridge.log("[InstallHook] ✅ 获取真实Context: " + realPackageName);
+        }
+    } catch (Throwable e) {
+        //XposedBridge.log("[InstallHook] ❌ 获取真实Context失败: " + e.getMessage());
+    }
+    
+    // 降级方案：如果获取失败，回退使用Xposed传入的参数
+    if (realClassLoader == null) {
+        realClassLoader = lpparam.classLoader;
+    }
+    if (appContext == null) {
+        try {
+            // 尝试创建代理Context
+          //  appContext = createProxyContext(realPackageName);
+        } catch (Throwable ignored) {}
+    }
+    
+    // ========== 🚨【分身核心修复2】主动修复so路径（不等Application.attach）==========
+    if (appContext != null) {
+        try {
+            ApplicationInfo ai = appContext.getApplicationInfo();
+            if (ai != null) {
+                // 强制重置nativeLibraryDir，触发系统重新计算正确路径
+                // 分身环境下这个字段指向错误路径，重新set同一值会触发重新解析
+                XposedHelpers.setObjectField(ai, "nativeLibraryDir", ai.nativeLibraryDir);
+                //XposedBridge.log("[InstallHook] ✅ 分身主动修复.so路径: " + ai.nativeLibraryDir);
+            }
+        } catch (Throwable e) {
+            //XposedBridge.log("[InstallHook] ❌ 分身主动修复.so路径失败: " + e.getMessage());
+        }
+    }
+    
+    // ========== 🚨【分身核心修复3】主动加载配置（不等任何回调）==========
+    // 必须在这里加载，因为分身的Application.attach永远不会触发
+    currentTargetApp = realPackageName;
+    try {
+        loadConfigFromFile();
+        //XposedBridge.log("[InstallHook] ✅ 主动加载配置完成: " + currentTargetApp);
+    } catch (Throwable e) {
+        //XposedBridge.log("[InstallHook] ❌ 主动加载配置失败: " + e.getMessage());
+        createDefaultConfig();
+    }
+    
+    // ========== 跳过分身系统类/核心类 ==========
+    if (lpparam.packageName.contains("webview") ||
+        lpparam.packageName.contains("chromium") ||
+        lpparam.packageName.contains("android.") ||
+        lpparam.packageName.contains("com.android.") ||
+        lpparam.packageName.contains("system") ||
+        lpparam.packageName.contains("root")) {
+        return;
+    }
+    
+    // ========== Hook模块自身激活状态 ==========
+    if ("com.install.appinstall.xl".equals(lpparam.packageName)) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                MainActivity.class.getName(),
+                lpparam.classLoader,
+                "isModuleActivated",
+                XC_MethodReplacement.returnConstant(true)
+            );
+        } catch (Throwable ignored) {}
+        return;
+    }
+
+    // 更新当前目标应用（可能已被真实包名覆盖）
+    if (!currentTargetApp.equals(lpparam.packageName)) {
+        //XposedBridge.log("[InstallHook] 📌 包名修正: " + lpparam.packageName + " → " + currentTargetApp);
+    }
+
+    // 跳过系统应用
+    if (isSystemPackage(currentTargetApp)) {
+        //XposedBridge.log("[InstallHook] 跳过系统应用: " + currentTargetApp);
+        return;
+    }
+
+    //XposedBridge.log("[InstallHook] =========================================");
+    //XposedBridge.log("[InstallHook] 🚀 开始Hook应用: " + currentTargetApp);
+    //XposedBridge.log("[InstallHook] 📦 使用ClassLoader: " + realClassLoader.getClass().getName());
+    //XposedBridge.log("[InstallHook] =========================================");
+
+    try {
+        // ========== 初始化配置状态（确保默认值）==========
+        if (!installStatusMap.containsKey(currentTargetApp)) {
+            installStatusMap.put(currentTargetApp, true);
+        }
+        if (!floatingShownMap.containsKey(currentTargetApp)) {
+            floatingShownMap.put(currentTargetApp, true);
+        }
+        if (!blockExitMap.containsKey(currentTargetApp)) {
+            blockExitMap.put(currentTargetApp, false);
+        }
+        if (!permissionFakeMap.containsKey(currentTargetApp)) {
+            permissionFakeMap.put(currentTargetApp, true);
+        }
+        if (!userDefinedPackagesMap.containsKey(currentTargetApp)) {
+            userDefinedPackagesMap.put(currentTargetApp, new ArrayList<>());
+        }
+        if (!excludedPackagesMap.containsKey(currentTargetApp)) {
+            excludedPackagesMap.put(currentTargetApp, new ArrayList<>());
+        }
+
+        // ========== 🚨【分身核心修复4】所有Hook方法必须使用真实ClassLoader ==========
+        // 第1级：基础环境准备（防止崩溃）
+        hookBundleGetString(realClassLoader);
+        hookBundleEmptyInstance(realClassLoader);
+        //XposedBridge.log("[InstallHook] ✅ 基础环境Hook完成");
+
+        // 第2级：权限伪造（关键防御）
+        hookPackageUsageStatsPermission(realClassLoader);
+        hookQueryAllPackagesPermission(realClassLoader);
+        //XposedBridge.log("[InstallHook] ✅ 权限伪造Hook完成");
+
+        // 第3级：系统底层Hook
+        hookSystemFileRead();
+        hookPackageManagerReflect();
+        //XposedBridge.log("[InstallHook] ✅ 系统底层Hook完成");
+
+        // 第4级：退出拦截（用户体验保障）
+        hookExitMethods(realClassLoader);
+        hookIndirectExitMethods(realClassLoader);
+        hookGlobalExitSources(realClassLoader);
+        hookRunnableSystemExit(realClassLoader);
+        //XposedBridge.log("[InstallHook] ✅ 退出拦截Hook完成");
+
+        // 第5级：包管理核心伪造（数据层）
+        hookKeyMethods(realClassLoader);
+        hookOverloadMethods(realClassLoader);
+        hookIsApplicationEnabled(realClassLoader);
+        hookCheckPermission(realClassLoader);
+        hookGetActivityInfo(realClassLoader);
+        //XposedBridge.log("[InstallHook] ✅ 包管理核心Hook完成");
+
+        // 第6级：Intent相关伪造（应用层）
+        hookQueryIntentActivities(realClassLoader);
+        hookResolveActivity(realClassLoader);
+        hookQueryIntentServices(realClassLoader);
+        //XposedBridge.log("[InstallHook] ✅ Intent相关Hook完成");
+
+        // 第7级：启动拦截
+          /*
+      hookGetLaunchIntentForPackage(lpparam.classLoader);
+      hookCanStartActivity(lpparam.classLoader);
+      */
+        hookStartActivity(realClassLoader);
+        //XposedBridge.log("[InstallHook] ✅ 启动拦截Hook完成");
+
+        // 第8级：OkHttp网络和跨平台框架
+        hookOkHttp(realClassLoader);
+        hookFlutterPackageInfoPlus(realClassLoader);
+        hookFlutterAppInstalledChecker(realClassLoader);
+        hookFileSystemInstallCheck(realClassLoader);
+        hookReflectInstallCheck(realClassLoader);
+        hookFlutterMethodChannelCheck(realClassLoader);
+        //XposedBridge.log("[InstallHook] ✅ 网络/跨平台Hook完成");
+
+      
+      // 第9级：文件系统和命令行检测（底层检测）
+      hookRuntimeExecMethods(lpparam.classLoader);
+      hookFileSystemChecks(lpparam.classLoader);
+      hookLibDirectoryChecks(lpparam.classLoader);
+      
+        // 第10级：UI和用户体验
+        hookDialogCancelableMethods(realClassLoader);
+        hookActivityLifecycle(realClassLoader);
+        //XposedBridge.log("[InstallHook] ✅ UI相关Hook完成");
+
+        //XposedBridge.log("[InstallHook] 🎉 所有Hook执行成功: " + currentTargetApp);
+
+    } catch (Throwable t) {
+        //XposedBridge.log("[InstallHook] ❌ Hook失败: " + t.getMessage());
+        t.printStackTrace();
+    }
+}
+
+
+
 
   // 新增：判断是否为 Flutter 应用的辅助方法
   private boolean isFlutterApp(ClassLoader classLoader) {
@@ -363,6 +854,7 @@ public class HookInit implements IXposedHookLoadPackage {
 
     // 兜底逻辑：通过 ApplicationInfo 标志位验证
     try {
+    
       Context context = (Context) XposedHelpers.callStaticMethod(
         XposedHelpers.findClass("android.app.ActivityThread", null),
         "currentApplication"
@@ -375,6 +867,7 @@ public class HookInit implements IXposedHookLoadPackage {
             ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) !=
         0
       );
+      
     } catch (Throwable t) {
       return false;
     }
@@ -408,9 +901,7 @@ public class HookInit implements IXposedHookLoadPackage {
             if (obj != null) {
               list.add(obj.toString());
             }
-          } catch (Exception ex) {
-           
-          }
+          } catch (Exception ex) {}
         }
       }
     }
@@ -430,348 +921,575 @@ public class HookInit implements IXposedHookLoadPackage {
     return array;
   }
 
-  // 从文件路径加载配置
-  private void loadConfigFromFile() {
-    try {
-      // 配置文件路径 - 按优先级查找
-      String[] loadPaths = {
-        "/data/data/" + currentTargetApp + "/files/install_fake_config.json",
-        "/data/user/0/" + currentTargetApp + "/files/install_fake_config.json",
-        "/storage/emulated/0/Android/data/" +
-        currentTargetApp +
-        "/files/install_fake_config.json",
-      };
-
-      File configFile = null;
-      String foundPath = null;
-
-      // 按优先级查找存在的配置文件
-      for (String filePath : loadPaths) {
-        File tempFile = new File(filePath);
-        if (tempFile.exists() && tempFile.length() > 0) {
-          configFile = tempFile;
-          foundPath = filePath;
-          //    log("✅ 找到配置文件: " + filePath);
-          break; // 找到就停止
-        }
+ // 从文件路径加载配置
+private void loadConfigFromFile() {
+  try {
+  
+    // 配置文件路径 - 按优先级查找
+    String currentPkg = currentTargetApp;  // 适配分身的配置路径
+     String[] loadPaths = {
+       "/data/data/" + currentPkg + "/files/install_fake_config.json",
+       "/data/user/0/" + currentPkg + "/files/install_fake_config.json",
+       "/storage/emulated/0/Android/data/" + currentPkg + "/files/install_fake_config.json",
+     };
+    File configFile = null;
+    String foundPath = null;
+    // 按优先级查找存在的配置文件
+    for (String filePath : loadPaths) {
+      File tempFile = new File(filePath);
+      if (tempFile.exists() && tempFile.length() > 0) {
+        configFile = tempFile;
+        foundPath = filePath;
+        break; // 找到就停止
       }
-
-      if (configFile != null && foundPath != null) {
-        try {
-          FileInputStream fis = new FileInputStream(configFile);
-          BufferedReader reader = new BufferedReader(
-            new InputStreamReader(fis)
-          );
-          StringBuilder jsonBuilder = new StringBuilder();
-          String line;
-          while ((line = reader.readLine()) != null) {
-            jsonBuilder.append(line);
-          }
-          reader.close();
-          fis.close();
-
-          String jsonStr = jsonBuilder.toString();
-          JSONObject configJson = new JSONObject(jsonStr);
-
-          if (configJson.has(currentTargetApp)) {
-            JSONObject appConfig = configJson.getJSONObject(currentTargetApp);
-
-            // 加载安装状态
-            if (appConfig.has("install_status")) {
-              boolean status = appConfig.getBoolean("install_status");
-              installStatusMap.put(currentTargetApp, status);
-              //     log("✅ 加载安装状态: " + status);
-            } else {
-              installStatusMap.put(currentTargetApp, true);
-            }
-
-            // 加载悬浮窗显示状态
-            if (appConfig.has("floating_shown")) {
-              boolean shown = appConfig.getBoolean("floating_shown");
-              floatingShownMap.put(currentTargetApp, shown);
-            } else {
-              floatingShownMap.put(currentTargetApp, true);
-            }
-
-            // 加载悬浮窗位置
-            if (appConfig.has("floating_x")) {
-              String xStr = appConfig.getString("floating_x");
-              if (!xStr.equals("null") && !xStr.isEmpty()) {
-                try {
-                  floatingXMap.put(currentTargetApp, Float.parseFloat(xStr));
-                } catch (NumberFormatException e) {
-                  floatingXMap.put(currentTargetApp, null);
-                }
-              }
-            }
-            if (appConfig.has("floating_y")) {
-              String yStr = appConfig.getString("floating_y");
-              if (!yStr.equals("null") && !yStr.isEmpty()) {
-                try {
-                  floatingYMap.put(currentTargetApp, Float.parseFloat(yStr));
-                } catch (NumberFormatException e) {
-                  floatingYMap.put(currentTargetApp, null);
-                }
-              }
-            }
-
-            // 加载拦截退出状态
-            if (appConfig.has("block_exit")) {
-              boolean blockExit = appConfig.getBoolean("block_exit");
-              blockExitMap.put(currentTargetApp, blockExit);
-              //  log("✅ 加载拦截退出状态: " + blockExit);
-            } else {
-              blockExitMap.put(currentTargetApp, false);
-            }
-
-            // 加载权限伪造状态
-            if (appConfig.has("permission_fake")) {
-              boolean permissionFake = appConfig.getBoolean("permission_fake");
-              permissionFakeMap.put(currentTargetApp, permissionFake);
-              // log("✅ 加载权限伪造状态: " + permissionFake);
-            } else {
-              permissionFakeMap.put(currentTargetApp, true); // 默认开启
-              // log("✅ 使用默认权限伪造状态: 开启");
-            }
-            // 加载拦截模式历史
-            if (appConfig.has("intercept_patterns")) {
-              JSONArray patternsArray = appConfig.getJSONArray(
-                "intercept_patterns"
-              );
-              List<InterceptPattern> patterns = new ArrayList<>();
-              for (int i = 0; i < patternsArray.length(); i++) {
-                JSONObject patternObj = patternsArray.getJSONObject(i);
-                InterceptPattern pattern = new InterceptPattern(
-                  patternObj.getString("pattern_hash"),
-                  jsonArrayToStringList(
-                    patternObj.getJSONArray("installed_packages")
-                  ),
-                  jsonArrayToStringList(
-                    patternObj.getJSONArray("not_installed_packages")
-                  )
-                );
-                pattern.userChoice = patternObj.optString("user_choice", "");
-                pattern.choiceCount = patternObj.optInt("choice_count", 0);
-                pattern.lastDetectedTime = patternObj.optLong(
-                  "last_detected_time",
-                  System.currentTimeMillis()
-                );
-                pattern.silentIntercept = patternObj.optBoolean(
-                  "silent_intercept",
-                  false
-                );
-                patterns.add(pattern);
-              }
-              interceptPatternsMap.put(currentTargetApp, patterns);
-              //  log("✅ 加载拦截模式: " + patterns.size() + " 个");
-            }
-
-            // 加载全局捕获包名
-            if (appConfig.has("global_captured_packages")) {
-              JSONArray packagesArray = appConfig.getJSONArray(
-                "global_captured_packages"
-              );
-              synchronized (globalCapturedPackages) {
-                globalCapturedPackages.clear();
-                for (int i = 0; i < packagesArray.length(); i++) {
-                  String pkg = packagesArray.getString(i);
-                  if (!globalCapturedPackages.contains(pkg)) {
-                    globalCapturedPackages.add(pkg);
-                  }
-                }
-              }
-              //   log("✅ 加载全局捕获包: " + globalCapturedPackages.size() + " 个");
-            }
-            //   log("✅ 配置加载完成，来自: " + foundPath);
-
+    }
+    if (configFile != null && foundPath != null) {
+      try {
+        FileInputStream fis = new FileInputStream(configFile);
+        BufferedReader reader = new BufferedReader(
+          new InputStreamReader(fis)
+        );
+        StringBuilder jsonBuilder = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+          jsonBuilder.append(line);
+        }
+        reader.close();
+        fis.close();
+        String jsonStr = jsonBuilder.toString();
+        JSONObject configJson = new JSONObject(jsonStr);
+        if (configJson.has(currentTargetApp)) {
+          JSONObject appConfig = configJson.getJSONObject(currentTargetApp);
+          // 加载安装状态
+          if (appConfig.has("install_status")) {
+            boolean status = appConfig.getBoolean("install_status");
+            installStatusMap.put(currentTargetApp, status);
           } else {
-            //    log("⚠️ 配置文件中没有当前应用的数据，创建默认配置");
-            createDefaultConfig();
+            installStatusMap.put(currentTargetApp, true);
           }
-        } catch (Throwable e) {
-          log("❌ 读取配置文件异常: " + e.getMessage());
+          // 加载悬浮窗显示状态
+          if (appConfig.has("floating_shown")) {
+            boolean shown = appConfig.getBoolean("floating_shown");
+            floatingShownMap.put(currentTargetApp, shown);
+          } else {
+            floatingShownMap.put(currentTargetApp, true);
+          }
+          // 加载悬浮窗位置
+          if (appConfig.has("floating_x")) {
+            String xStr = appConfig.getString("floating_x");
+            if (!xStr.equals("null") && !xStr.isEmpty()) {
+              try {
+                floatingXMap.put(currentTargetApp, Float.parseFloat(xStr));
+              } catch (NumberFormatException e) {
+                floatingXMap.put(currentTargetApp, null);
+              }
+            }
+          }
+          if (appConfig.has("floating_y")) {
+            String yStr = appConfig.getString("floating_y");
+            if (!yStr.equals("null") && !yStr.isEmpty()) {
+              try {
+                floatingYMap.put(currentTargetApp, Float.parseFloat(yStr));
+              } catch (NumberFormatException e) {
+                floatingYMap.put(currentTargetApp, null);
+              }
+            }
+          }
+          // 加载拦截退出状态
+          if (appConfig.has("block_exit")) {
+            boolean blockExit = appConfig.getBoolean("block_exit");
+            blockExitMap.put(currentTargetApp, blockExit);
+          } else {
+            blockExitMap.put(currentTargetApp, false);
+          }
+          // 加载权限伪造状态
+          if (appConfig.has("permission_fake")) {
+            boolean permissionFake = appConfig.getBoolean("permission_fake");
+            permissionFakeMap.put(currentTargetApp, permissionFake);
+          } else {
+            permissionFakeMap.put(currentTargetApp, true); // 默认开启
+          }
+          // 加载拦截模式历史
+          if (appConfig.has("intercept_patterns")) {
+            JSONArray patternsArray = appConfig.getJSONArray(
+              "intercept_patterns"
+            );
+            List<InterceptPattern> patterns = new ArrayList<>();
+            for (int i = 0; i < patternsArray.length(); i++) {
+              JSONObject patternObj = patternsArray.getJSONObject(i);
+              InterceptPattern pattern = new InterceptPattern(
+                patternObj.getString("pattern_hash"),
+                jsonArrayToStringList(
+                  patternObj.getJSONArray("installed_packages")
+                ),
+                jsonArrayToStringList(
+                  patternObj.getJSONArray("not_installed_packages")
+                )
+              );
+              pattern.userChoice = patternObj.optString("user_choice", "");
+              pattern.choiceCount = patternObj.optInt("choice_count", 0);
+              pattern.lastDetectedTime = patternObj.optLong(
+                "last_detected_time",
+                System.currentTimeMillis()
+              );
+              pattern.silentIntercept = patternObj.optBoolean(
+                "silent_intercept",
+                false
+              );
+              patterns.add(pattern);
+            }
+            interceptPatternsMap.put(currentTargetApp, patterns);
+          }
+          // 加载全局捕获包名
+          if (appConfig.has("global_captured_packages")) {
+            JSONArray packagesArray = appConfig.getJSONArray(
+              "global_captured_packages"
+            );
+            synchronized (globalCapturedPackages) {
+              globalCapturedPackages.clear();
+              for (int i = 0; i < packagesArray.length(); i++) {
+                String pkg = packagesArray.getString(i);
+                if (!globalCapturedPackages.contains(pkg)) {
+                  globalCapturedPackages.add(pkg);
+                }
+              }
+            }
+          }
+          // 加载用户自定义包名
+          if (appConfig.has("user_defined_packages")) {
+            JSONArray userPackagesArray = appConfig.getJSONArray(
+              "user_defined_packages"
+            );
+            List<String> userPackages = jsonArrayToStringList(
+              userPackagesArray
+            );
+            userDefinedPackagesMap.put(currentTargetApp, userPackages);
+            // 同步到全局捕获包（确保参与伪造）
+            synchronized (globalCapturedPackages) {
+              globalCapturedPackages.addAll(userPackages);
+            }
+            log("加载用户自定义伪造包名: " + userPackages.size() + " 个");
+          } else {
+            // 无用户自定义包名时初始化空列表
+            userDefinedPackagesMap.put(currentTargetApp, new ArrayList<>());
+          }
+          // 新增：加载用户自定义排除包名
+          if (appConfig.has("excluded_packages")) {
+            JSONArray excludedArray = appConfig.getJSONArray("excluded_packages");
+            List<String> excludedPackages = jsonArrayToStringList(excludedArray);
+            excludedPackagesMap.put(currentTargetApp, excludedPackages);
+            log("加载用户自定义排除包名: " + excludedPackages.size() + " 个");
+          } else {
+            excludedPackagesMap.put(currentTargetApp, new ArrayList<>());
+          }
+          // 清理全局捕获包名的重复数据
+          synchronized (globalCapturedPackages) {
+            globalCapturedPackages.addAll(
+              new HashSet<>(
+                userDefinedPackagesMap.getOrDefault(
+                  currentTargetApp,
+                  new ArrayList<>()
+                )
+              )
+            );
+          }
+          log("✅ 配置加载完成 " + foundPath);
+        } else {
+        //  log("⚠️ 配置文件中没有当前应用的数据，创建默认配置");
           createDefaultConfig();
         }
-      } else {
-        log("⚠️ 未找到配置文件,创建默认配置");
+      } catch (Throwable e) {
+        log("❌ 读取配置文件异常: " + e.getMessage());
         createDefaultConfig();
       }
-    } catch (Throwable t) {
-      // log("❌ 加载配置异常: " + t.getMessage());
+    } else {
+    //  log("⚠️ 未找到配置文件,创建默认配置");
       createDefaultConfig();
     }
+  } catch (Throwable t) {
+    log("❌ 加载配置异常: " + t.getMessage());
+    createDefaultConfig();
   }
+}
+
 
   // 保存配置文件
-  private void saveConfigToFile() {
-    if (currentTargetApp == null || currentTargetApp.isEmpty()) {
-      log("❌ 配置保存失败：当前目标应用为空");
-      return;
-    }
-    if (isSystemPackage(currentTargetApp)) {
-      //  log("✅ 跳过系统包配置保存: " + currentTargetApp);
-      return;
-    }
-
-    Boolean status = installStatusMap.get(currentTargetApp);
-    if (status == null) {
-      log("❌ 配置保存失败：未获取到应用安装状态");
-      return;
-    }
-
-    // 按优先级尝试多个保存路径
-    String[] savePaths = {
-      "/data/data/" + currentTargetApp + "/files/install_fake_config.json", 
-      "/data/user/0/" + currentTargetApp + "/files/install_fake_config.json", 
-      "/storage/emulated/0/Android/data/" +
-      currentTargetApp +
-      "/files/install_fake_config.json",
-    };
-
-    boolean saveSuccess = false;
-    String savedPath = null;
-    Throwable lastError = null;
-
-    for (String filePath : savePaths) {
-      try {
-        File configFile = new File(filePath);
-        File parentDir = configFile.getParentFile();
-
-        // 确保父目录存在
-        if (parentDir != null && !parentDir.exists()) {
-          boolean mkdirSuccess = parentDir.mkdirs();
-          if (!mkdirSuccess) {
-            lastError = new Exception("无法创建目录 " + parentDir.getPath());
-            log("❌ 配置保存失败：无法创建目录 " + parentDir.getPath());
-            continue; // 尝试下一个路径
-          }
-        }
-
-        // 读取现有配置（无则创建新JSON）
-        JSONObject configJson = new JSONObject();
-        if (configFile.exists() && configFile.length() > 0) {
-          FileInputStream fis = new FileInputStream(configFile);
-          BufferedReader reader = new BufferedReader(
-            new InputStreamReader(fis)
-          );
-          StringBuilder jsonBuilder = new StringBuilder();
-          String line;
-          while ((line = reader.readLine()) != null) {
-            jsonBuilder.append(line);
-          }
-          reader.close();
-          fis.close();
-          String existingJson = jsonBuilder.toString();
-          if (!existingJson.trim().isEmpty()) {
-            configJson = new JSONObject(existingJson);
-          }
-        }
-
-        // 组装应用配置数据
-        Float x = floatingXMap.get(currentTargetApp);
-        Float y = floatingYMap.get(currentTargetApp);
-        Boolean blockExit = blockExitMap.get(currentTargetApp);
-        Boolean permissionFake = permissionFakeMap.get(currentTargetApp);
-
-        JSONObject appConfig = new JSONObject();
-        appConfig.put("install_status", status);
-        appConfig.put(
-          "floating_shown",
-          floatingShownMap.getOrDefault(currentTargetApp, true)
-        );
-        appConfig.put("floating_x", x != null ? String.valueOf(x) : "null");
-        appConfig.put("floating_y", y != null ? String.valueOf(y) : "null");
-        appConfig.put("block_exit", blockExit != null ? blockExit : false);
-        appConfig.put(
-          "permission_fake",
-          permissionFake != null ? permissionFake : true
-        );
-        appConfig.put("last_save_time", System.currentTimeMillis());
-        appConfig.put("last_save_path", filePath); // 记录保存的路径
-
-        // 保存拦截模式历史
-        List<InterceptPattern> patterns = interceptPatternsMap.get(
-          currentTargetApp
-        );
-        if (patterns != null && !patterns.isEmpty()) {
-          JSONArray patternsArray = new JSONArray();
-          for (InterceptPattern pattern : patterns) {
-            JSONObject patternObj = new JSONObject();
-            patternObj.put("pattern_hash", pattern.patternHash);
-            patternObj.put(
-              "installed_packages",
-              stringListToJsonArray(pattern.installedPackages)
-            );
-            patternObj.put(
-              "not_installed_packages",
-              stringListToJsonArray(pattern.notInstalledPackages)
-            );
-            patternObj.put(
-              "user_choice",
-              pattern.userChoice != null ? pattern.userChoice : ""
-            );
-            patternObj.put("choice_count", pattern.choiceCount);
-            patternObj.put("last_detected_time", pattern.lastDetectedTime);
-            patternObj.put("silent_intercept", pattern.silentIntercept);
-            patternsArray.put(patternObj);
-          }
-          appConfig.put("intercept_patterns", patternsArray);
-        }
-
-        // 保存全局捕获包名
-        synchronized (globalCapturedPackages) {
-          appConfig.put(
-            "global_captured_packages",
-            stringListToJsonArray(globalCapturedPackages)
-          );
-        }
-
-        // 写入配置文件
-        configJson.put(currentTargetApp, appConfig);
-        String finalJson = configJson.toString(2); // 格式化JSON
-        FileOutputStream fos = new FileOutputStream(configFile);
-        OutputStreamWriter writer = new OutputStreamWriter(fos, "UTF-8");
-        writer.write(finalJson);
-        writer.flush();
-        writer.close();
-        fos.close();
-
-        saveSuccess = true;
-        savedPath = filePath;
-        log("✅ 配置保存成功: " + filePath);
-        break; // 保存成功，不再尝试其他路径
-      } catch (Throwable t) {
-        // 当前路径保存失败，记录日志并继续尝试下一个路径
-        lastError = t;
-        log("❌ 配置保存异常: " + t.getMessage() + " | 路径: " + filePath);
-        continue; // 继续尝试下一个路径
-      }
-    }
-
-    if (!saveSuccess) {
-      //  log("❌ 配置保存失败：所有路径都无法保存");
-      if (lastError != null) {
-        //  log("❌ 最后错误: " + lastError.getMessage());
-      }
-    }
+private void saveConfigToFile() {
+  if (currentTargetApp == null || currentTargetApp.isEmpty()) {
+    log("❌ 配置保存失败：当前目标应用为空");
+    return;
   }
-
-  // 创建默认配置
-  private void createDefaultConfig() {
+  if (isSystemPackage(currentTargetApp)) {
+    log("跳过系统配置: " + currentTargetApp);
+    return;
+  }
+  Boolean status = installStatusMap.get(currentTargetApp);
+  if (status == null) {
+    log("❌ 配置保存失败：未获取到应用安装状态");
+    return;
+  }
+  // 动态使用当前运行包名（分身时自动为分身包名）
+   String currentPkg = currentTargetApp;
+  // 按优先级尝试多个保存路径
+  String[] savePaths = {
+    "/data/data/" + currentTargetApp + "/files/install_fake_config.json",
+    "/data/user/0/" + currentTargetApp + "/files/install_fake_config.json",
+    "/storage/emulated/0/Android/data/" +
+    currentTargetApp +
+    "/files/install_fake_config.json",
+  };
+  boolean saveSuccess = false;
+  String savedPath = null;
+  Throwable lastError = null;
+  for (String filePath : savePaths) {
     try {
-      installStatusMap.put(currentTargetApp, true);
-      floatingShownMap.put(currentTargetApp, true);
-      blockExitMap.put(currentTargetApp, false);
-      permissionFakeMap.put(currentTargetApp, true); 
-      interceptPatternsMap.put(
-        currentTargetApp,
-        new ArrayList<InterceptPattern>()
+      File configFile = new File(filePath);
+      File parentDir = configFile.getParentFile();
+      // 确保父目录存在
+      if (parentDir != null && !parentDir.exists()) {
+        boolean mkdirSuccess = parentDir.mkdirs();
+        if (!mkdirSuccess) {
+          lastError = new Exception("无法创建目录 " + parentDir.getPath());
+          log("❌ 配置保存失败：无法创建目录 " + parentDir.getPath());
+          continue; // 尝试下一个路径
+        }
+      }
+      // 读取现有配置（无则创建新JSON）
+      JSONObject configJson = new JSONObject();
+      if (configFile.exists() && configFile.length() > 0) {
+        FileInputStream fis = new FileInputStream(configFile);
+        BufferedReader reader = new BufferedReader(
+          new InputStreamReader(fis)
+        );
+        StringBuilder jsonBuilder = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+          jsonBuilder.append(line);
+        }
+        reader.close();
+        fis.close();
+        String existingJson = jsonBuilder.toString();
+        if (!existingJson.trim().isEmpty()) {
+          configJson = new JSONObject(existingJson);
+        }
+      }
+      // 组装应用配置数据
+      Float x = floatingXMap.get(currentTargetApp);
+      Float y = floatingYMap.get(currentTargetApp);
+      Boolean blockExit = blockExitMap.get(currentTargetApp);
+      Boolean permissionFake = permissionFakeMap.get(currentTargetApp);
+      JSONObject appConfig = new JSONObject();
+      appConfig.put("install_status", status);
+      appConfig.put(
+        "floating_shown",
+        floatingShownMap.getOrDefault(currentTargetApp, true)
       );
-      // log("✅ 创建默认配置完成");
+      appConfig.put("floating_x", x != null ? String.valueOf(x) : "null");
+      appConfig.put("floating_y", y != null ? String.valueOf(y) : "null");
+      appConfig.put("block_exit", blockExit != null ? blockExit : false);
+      appConfig.put(
+        "permission_fake",
+        permissionFake != null ? permissionFake : true
+      );
+      appConfig.put("last_save_time", System.currentTimeMillis());
+      appConfig.put("last_save_path", filePath); // 记录保存的路径
+      // 保存用户自定义包名
+      List<String> userPackages = userDefinedPackagesMap.getOrDefault(
+        currentTargetApp,
+        new ArrayList<>()
+      );
+      appConfig.put(
+        "user_defined_packages",
+        stringListToJsonArray(userPackages)
+      );
+      // 新增：保存用户自定义排除包名
+      List<String> excludedPackages = excludedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+      appConfig.put("excluded_packages", stringListToJsonArray(excludedPackages));
+      // 保存拦截模式历史
+      List<InterceptPattern> patterns = interceptPatternsMap.get(
+        currentTargetApp
+      );
+      if (patterns != null && !patterns.isEmpty()) {
+        JSONArray patternsArray = new JSONArray();
+        for (InterceptPattern pattern : patterns) {
+          JSONObject patternObj = new JSONObject();
+          patternObj.put("pattern_hash", pattern.patternHash);
+          patternObj.put(
+            "installed_packages",
+            stringListToJsonArray(pattern.installedPackages)
+          );
+          patternObj.put(
+            "not_installed_packages",
+            stringListToJsonArray(pattern.notInstalledPackages)
+          );
+          patternObj.put(
+            "user_choice",
+            pattern.userChoice != null ? pattern.userChoice : ""
+          );
+          patternObj.put("choice_count", pattern.choiceCount);
+          patternObj.put("last_detected_time", pattern.lastDetectedTime);
+          patternObj.put("silent_intercept", pattern.silentIntercept);
+          patternsArray.put(patternObj);
+        }
+        appConfig.put("intercept_patterns", patternsArray);
+      }
+      // 保存全局捕获包名
+      synchronized (globalCapturedPackages) {
+        appConfig.put(
+          "global_captured_packages",
+          stringListToJsonArray(globalCapturedPackages)
+        );
+      }
+      // 写入配置文件
+      configJson.put(currentTargetApp, appConfig);
+      String finalJson = configJson.toString(2); // 格式化JSON
+      FileOutputStream fos = new FileOutputStream(configFile);
+      OutputStreamWriter writer = new OutputStreamWriter(fos, "UTF-8");
+      writer.write(finalJson);
+      writer.flush();
+      writer.close();
+      fos.close();
+      saveSuccess = true;
+      savedPath = filePath;
+   //   log("✅ 配置保存成功: " + filePath);
+      break; // 保存成功，不再尝试其他路径
     } catch (Throwable t) {
-      log("❌ 创建默认配置异常: " + t.getMessage());
+      // 当前路径保存失败，记录日志并继续尝试下一个路径
+      lastError = t;
+      log("❌ 配置保存异常: " + t.getMessage() + " | 路径: " + filePath);
+      continue; // 继续尝试下一个路径
     }
   }
+  if (!saveSuccess) {
+    if (lastError != null) {
+      //    log("❌ 最后错误: " + lastError.getMessage());
+    }
+  }
+}
+
+/*
+
+private void hookGetAppContext() {
+    try {
+        XposedHelpers.findAndHookMethod(
+            "android.app.Application",
+            null,
+            "onCreate",
+            new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    mAppContext = (Context) param.thisObject;
+                  //  log("✅ 成功获取应用 Context");
+
+                    // 👇 在这里加载配置！！！
+                    loadConfigFromFile();
+                }
+            }
+        );
+    } catch (Throwable e) {
+    }
+}
+
+
+
+// 从文件路径加载配置
+private void loadConfigFromFile() {
+  try {
+    Context context = mAppContext;
+    if (context == null) {
+      log("❌ Context 未就绪，跳过加载");
+      return;
+    }
+
+    File configFile = new File(context.getFilesDir(), "install_fake_config.json");
+    if (!configFile.exists() || configFile.length() == 0) {
+      log("⚠️ 配置文件不存在，使用默认配置");
+      configLoaded = true; // 🔥 即使是空，也算加载完成
+      return;
+    }
+
+    FileInputStream fis = new FileInputStream(configFile);
+    BufferedReader reader = new BufferedReader(new InputStreamReader(fis));
+    StringBuilder jsonBuilder = new StringBuilder();
+    String line;
+    while ((line = reader.readLine()) != null) {
+      jsonBuilder.append(line);
+    }
+    reader.close();
+    fis.close();
+
+    String json = jsonBuilder.toString();
+    JSONObject configJson = new JSONObject(json);
+
+    // 这里保留你原来的解析逻辑
+    if (configJson.has(currentTargetApp)) {
+      JSONObject appConfig = configJson.getJSONObject(currentTargetApp);
+
+      // 示例：你原来怎么解析就怎么写
+      // 我这里按你之前逻辑写
+      if (appConfig.has("install_status")) {
+        boolean status = appConfig.getBoolean("install_status");
+        installStatusMap.put(currentTargetApp, status);
+      }
+      if (appConfig.has("floating_shown")) {
+        boolean shown = appConfig.getBoolean("floating_shown");
+        floatingShownMap.put(currentTargetApp, shown);
+      }
+      if (appConfig.has("block_exit")) {
+        boolean block = appConfig.getBoolean("block_exit");
+        blockExitMap.put(currentTargetApp, block);
+      }
+      if (appConfig.has("permission_fake")) {
+        boolean fake = appConfig.getBoolean("permission_fake");
+        permissionFakeMap.put(currentTargetApp, fake);
+      }
+    }
+
+    log("✅ 配置加载成功");
+
+  } catch (Throwable e) {
+    log("❌ 配置加载失败: " + e.getMessage());
+  } finally {
+    configLoaded = true; // 🔥 不管成功失败，都标记加载完成
+  }
+}
+
+
+
+
+private void saveConfigToFile() {
+  // ==============================
+  // 🔥 🔥 🔥 防丢失核心
+  // ==============================
+  if (mAppContext == null) {
+    log("⏳ Context 未就绪，跳过保存");
+    return;
+  }
+  if (!configLoaded) {
+    log("⏳ 配置未加载完成，禁止保存（防止覆盖丢失）");
+    return;
+  }
+
+  if (currentTargetApp == null || currentTargetApp.isEmpty()) {
+    log("❌ 无当前包名，不保存");
+    return;
+  }
+  if (isSystemPackage(currentTargetApp)) {
+    return;
+  }
+  Boolean status = installStatusMap.get(currentTargetApp);
+  if (status == null) {
+    log("❌ 无安装状态，不保存");
+    return;
+  }
+
+  try {
+    Context context = mAppContext;
+    File dir = context.getFilesDir();
+    dir.mkdirs(); // 兼容所有分身
+
+    File configFile = new File(dir, "install_fake_config.json");
+
+    JSONObject configJson = new JSONObject();
+    if (configFile.exists() && configFile.length() > 0) {
+      FileInputStream fis = new FileInputStream(configFile);
+      BufferedReader reader = new BufferedReader(new InputStreamReader(fis));
+      StringBuilder sb = new StringBuilder();
+      String line;
+      while ((line = reader.readLine()) != null) sb.append(line);
+      reader.close();
+      fis.close();
+
+      String old = sb.toString().trim();
+      if (!old.isEmpty()) {
+        configJson = new JSONObject(old);
+      }
+    }
+
+    Float x = floatingXMap.get(currentTargetApp);
+    Float y = floatingYMap.get(currentTargetApp);
+    Boolean blockExit = blockExitMap.get(currentTargetApp);
+    Boolean permissionFake = permissionFakeMap.get(currentTargetApp);
+
+    JSONObject appConfig = new JSONObject();
+    appConfig.put("install_status", status);
+    appConfig.put("floating_shown", floatingShownMap.getOrDefault(currentTargetApp, true));
+    appConfig.put("floating_x", x != null ? String.valueOf(x) : "null");
+    appConfig.put("floating_y", y != null ? String.valueOf(y) : "null");
+    appConfig.put("block_exit", blockExit != null ? blockExit : false);
+    appConfig.put("permission_fake", permissionFake != null ? permissionFake : true);
+    appConfig.put("last_save_time", System.currentTimeMillis());
+
+    // 你原来的其他配置项原样保留
+    List<String> userPackages = userDefinedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+    appConfig.put("user_defined_packages", stringListToJsonArray(userPackages));
+    List<String> excludedPackages = excludedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+    appConfig.put("excluded_packages", stringListToJsonArray(excludedPackages));
+
+    List<InterceptPattern> patterns = interceptPatternsMap.get(currentTargetApp);
+    if (patterns != null && !patterns.isEmpty()) {
+      JSONArray arr = new JSONArray();
+      for (InterceptPattern p : patterns) {
+        JSONObject o = new JSONObject();
+        o.put("pattern_hash", p.patternHash);
+        o.put("installed_packages", stringListToJsonArray(p.installedPackages));
+        o.put("not_installed_packages", stringListToJsonArray(p.notInstalledPackages));
+        o.put("user_choice", p.userChoice);
+        o.put("choice_count", p.choiceCount);
+        o.put("last_detected_time", p.lastDetectedTime);
+        o.put("silent_intercept", p.silentIntercept);
+        arr.put(o);
+      }
+      appConfig.put("intercept_patterns", arr);
+    }
+
+    synchronized (globalCapturedPackages) {
+      appConfig.put("global_captured_packages", stringListToJsonArray(globalCapturedPackages));
+    }
+
+    configJson.put(currentTargetApp, appConfig);
+
+    // 写入
+    FileOutputStream fos = new FileOutputStream(configFile);
+    OutputStreamWriter writer = new OutputStreamWriter(fos, "UTF-8");
+    writer.write(configJson.toString(2));
+    writer.flush();
+    writer.close();
+    fos.close();
+
+    log("✅ 配置保存成功：" + configFile.getAbsolutePath());
+
+  } catch (Throwable e) {
+    log("❌ 配置保存失败: " + e.getMessage());
+  }
+}
+
+*/
+
+
+
+
+// 创建默认配置
+private void createDefaultConfig() {
+  try {
+    installStatusMap.put(currentTargetApp, true);
+    floatingShownMap.put(currentTargetApp, true);
+    blockExitMap.put(currentTargetApp, false);
+    permissionFakeMap.put(currentTargetApp, true);
+    interceptPatternsMap.put(
+      currentTargetApp,
+      new ArrayList<InterceptPattern>()
+    );
+    // 初始化用户自定义包名列表
+    userDefinedPackagesMap.put(currentTargetApp, new ArrayList<>());
+    // 初始化用户自定义排除包名列表
+    excludedPackagesMap.put(currentTargetApp, new ArrayList<>());
+    // log("✅ 创建默认配置完成");
+  } catch (Throwable t) {
+    log("❌ 创建默认配置异常: " + t.getMessage());
+  }
+}
+
 
   // ========== 拦截退出功能核心方法 ==========
   private void hookExitMethods(ClassLoader classLoader) {
@@ -1058,35 +1776,40 @@ public class HookInit implements IXposedHookLoadPackage {
     }
   }
 
-  // 分析检测到的包名
-  private DetectedPackages analyzeDetectedPackages() {
-    DetectedPackages detected = new DetectedPackages();
-
-    try {
-      Boolean currentStatus = installStatusMap.get(currentTargetApp);
-      boolean isInstalledMode = currentStatus != null ? currentStatus : true;
-
-      synchronized (globalCapturedPackages) {
-        for (String pkg : globalCapturedPackages) {
-          // 快速过滤系统包
-          if (isSystemPackage(pkg)) {
-            continue; // 过滤系统包
-          }
-          if (isInstalledMode) {
-            detected.installedPackages.add(pkg);
-          } else {
-            detected.notInstalledPackages.add(pkg);
-          }
+ // 分析检测到的包名（过滤排除包，不纳入伪造列表）
+private DetectedPackages analyzeDetectedPackages() {
+  DetectedPackages detected = new DetectedPackages();
+  try {
+    Boolean currentStatus = installStatusMap.get(currentTargetApp);
+    boolean isInstalledMode = currentStatus != null ? currentStatus : true;
+    // 用 Set 临时存储，自动去重
+    Set<String> uniqueInstalled = new HashSet<>();
+    Set<String> uniqueNotInstalled = new HashSet<>();
+    // 获取用户手动排除的包名列表（核心过滤逻辑）
+    List<String> excludedPackages = excludedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+    
+    synchronized (globalCapturedPackages) {
+      for (String pkg : globalCapturedPackages) {
+        if (isSystemPackage(pkg)) continue; // 过滤系统包
+        if (excludedPackages.contains(pkg)) continue; // 过滤排除包（不纳入伪造）
+        if (isInstalledMode) {
+          uniqueInstalled.add(pkg); // 自动去重
+        } else {
+          uniqueNotInstalled.add(pkg); // 自动去重
         }
       }
-      // 生成模式哈希
-      detected.patternHash = generatePatternHash(detected);
-    } catch (Throwable t) {
-      log("分析检测包名异常: " + t.getMessage());
     }
-
-    return detected;
+    // 转存回 List，保持原有逻辑
+    detected.installedPackages = new ArrayList<>(uniqueInstalled);
+    detected.notInstalledPackages = new ArrayList<>(uniqueNotInstalled);
+    // 生成模式哈希
+    detected.patternHash = generatePatternHash(detected);
+  } catch (Throwable t) {
+    log("分析检测包名异常: " + t.getMessage());
   }
+  return detected;
+}
+
 
   // 生成模式哈希
   private String generatePatternHash(DetectedPackages detected) {
@@ -1163,7 +1886,8 @@ public class HookInit implements IXposedHookLoadPackage {
           detected.installedPackages.get(0) + " 等" + totalCount + "个应用";
       }
 
-      String message = "已自动拦截退出（基于历史选择）\n检测到：" + packageNames;
+      String message =
+        "已自动拦截退出（基于历史选择）\n检测到：" + packageNames;
       Toast.makeText(activity, message, Toast.LENGTH_LONG).show();
     } catch (Throwable t) {
       log("显示静默拦截Toast异常: " + t.getMessage());
@@ -1275,9 +1999,6 @@ public class HookInit implements IXposedHookLoadPackage {
     }
   }
 
-  private Activity getCurrentActivity() {
-    return null;
-  }
 
   // ========== 显示Activity退出拦截对话框 ==========
   private void showActivityExitInterceptDialog(
@@ -1436,55 +2157,108 @@ public class HookInit implements IXposedHookLoadPackage {
   }
 
   // ========== 悬浮窗功能 ==========
-  private void hookActivityLifecycle(ClassLoader classLoader) {
+private void hookActivityLifecycle(ClassLoader classLoader) {
     try {
-      XposedHelpers.findAndHookMethod(
-        "android.app.Activity",
-        classLoader,
-        "onCreate",
-        Bundle.class,
-        new XC_MethodHook() {
-          @Override
-          protected void afterHookedMethod(MethodHookParam param)
-            throws Throwable {
-            try {
-              final Activity activity = (Activity) param.thisObject;
-              final String activityName = activity.getClass().getName();
-
-              if (
-                activityName.contains("com.android") ||
-                activityName.contains("android.support") ||
-                activityName.contains("androidx.")
-              ) {
-                return;
-              }
-
-              floatingShownMap.put(currentTargetApp, true);
-              hookFragmentTransactions(activity);
-
-              new Handler(Looper.getMainLooper()).postDelayed(
-                new Runnable() {
-                  @Override
-                  public void run() {
+        XposedHelpers.findAndHookMethod(
+            "android.app.Activity",
+            classLoader,
+            "onCreate",
+            Bundle.class,
+            new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
                     try {
-                      showFloatingView(activity);
-                    } catch (Throwable t) {
-                      log("显示悬浮窗异常: " + t.getMessage());
-                    }
-                  }
-                },1000);
-            } catch (Throwable t) {
-              log("Activity生命周期Hook异常: " + t.getMessage());
-            }
-          }
+                        final Activity activity = (Activity) param.thisObject;
+                        final String activityName = activity.getClass().getName();
 
-          private void hookFragmentTransactions(Activity activity) {}
-        }
-      );
+                        if (activityName.contains("com.android") ||
+                            activityName.contains("android.support") ||
+                            activityName.contains("androidx.")) {
+                            return;
+                        }
+
+                        // 加载悬浮窗调用
+                        floatingShownMap.put(currentTargetApp, true);
+                        
+                        new Handler(Looper.getMainLooper()).postDelayed(
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    try {
+                                        showFloatingView(activity);
+                                    } catch (Throwable t) {
+                                        log("显示悬浮窗异常: " + t.getMessage());
+                                    }
+                                }
+                            },
+                            850
+                        );
+                    } catch (Throwable t) {
+                        log("Activity生命周期Hook异常: " + t.getMessage());
+                    }
+                }
+            }
+        );
+        
+        // 直接通过 Hook onResume 和 onPause 来追踪当前Activity
+        XposedHelpers.findAndHookMethod(
+            "android.app.Activity",
+            classLoader,
+            "onResume",
+            new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    currentResumedActivity = (Activity) param.thisObject;
+                    log("当前Activity: " + currentResumedActivity.getClass().getName());
+                }
+            }
+        );
+        
+        XposedHelpers.findAndHookMethod(
+            "android.app.Activity",
+            classLoader,
+            "onPause",
+            new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (currentResumedActivity == param.thisObject) {
+                        currentResumedActivity = null;
+                    }
+                }
+            }
+        );
+        
+        XposedHelpers.findAndHookMethod(
+            "android.app.Activity",
+            classLoader,
+            "onDestroy",
+            new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (currentResumedActivity == param.thisObject) {
+                        currentResumedActivity = null;
+                    }
+                }
+            }
+        );
+        
+        //log("✅ Activity追踪Hook完成");
+        
     } catch (Throwable t) {
-      log("Hook Activity生命周期异常: " + t.getMessage());
+        log("Hook Activity生命周期异常: " + t.getMessage());
     }
-  }
+}
+
+// 完善 getCurrentActivity 方法
+private Activity getCurrentActivity() {
+    // 返回当前追踪的Activity
+    if (currentResumedActivity != null && 
+        !currentResumedActivity.isFinishing() && 
+        !currentResumedActivity.isDestroyed()) {
+        return currentResumedActivity;
+    }
+    return null;
+}
 
   // 完整的 showFloatingView 方法
   private void showFloatingView(final Activity activity) {
@@ -1597,7 +2371,7 @@ public class HookInit implements IXposedHookLoadPackage {
     floatingView.bringToFront();
     decorView.updateViewLayout(floatingView, floatingView.getLayoutParams());
     // 提升层级（兼容部分弹窗）
-    floatingView.setElevation(9999f); 
+    floatingView.setElevation(9999f);
   }
 
   //定时置顶
@@ -1627,7 +2401,9 @@ public class HookInit implements IXposedHookLoadPackage {
             log("定时置顶异常：" + t.getMessage());
           }
         }
-      },300);
+      },
+      300
+    );
   }
 
   //停止定时置顶
@@ -1758,6 +2534,950 @@ public class HookInit implements IXposedHookLoadPackage {
     }
   }
 
+// 弹出添加自定义包名对话框（最终版：修复提示不显示+批量输入+全兼容）
+private void showAddPackageDialog(final Activity activity) {
+  try {
+    // 所有匿名类引用变量声明为final，解决非final报错
+    final String targetApp = currentTargetApp;
+    if (!userDefinedPackagesMap.containsKey(targetApp)) {
+      userDefinedPackagesMap.put(targetApp, new ArrayList<>());
+    }
+    final List<String> userPackages = userDefinedPackagesMap.get(targetApp);
+    final DisplayMetrics metrics = new DisplayMetrics();
+    activity.getWindowManager().getDefaultDisplay().getMetrics(metrics);
+    final LinearLayout[] packagesLayoutArr = new LinearLayout[1];
+    final EditText[] inputEtArr = new EditText[1];
+    
+    // 1. 顶部：输入框 + 下拉选择 + 添加按钮 横向布局（保持原有逻辑不变）
+    LinearLayout topLayout = new LinearLayout(activity);
+    topLayout.setOrientation(LinearLayout.HORIZONTAL);
+    topLayout.setPadding(0, 0, 0, 20); // 增加底部内边距，与下方列表分隔
+    
+    // ========== 输入框优化（保持原有逻辑不变） ==========
+    final EditText inputEt = new EditText(activity);
+    inputEt.setHint("输入包名\n(如com.a.b.c)");
+    inputEt.setPadding(30, 20, 30, 20);
+    inputEt.setTextColor(0xFF000000);
+    inputEt.setBackgroundColor(0xFFFFFFFF);
+    inputEt.setHintTextColor(0xFF999999);
+    inputEt.setBackgroundTintMode(null);
+    inputEt.setOutlineProvider(null);
+    try {
+        Class<?> gradientDrawableClass = Class.forName("android.graphics.drawable.GradientDrawable");
+        Object etDrawable = gradientDrawableClass.newInstance();
+        Method setColorMethod = gradientDrawableClass.getDeclaredMethod("setColor", int.class);
+        Method setCornerRadiusMethod = gradientDrawableClass.getDeclaredMethod("setCornerRadius", float.class);
+        Method setStrokeMethod = gradientDrawableClass.getDeclaredMethod("setStroke", int.class, int.class);
+        
+        setColorMethod.invoke(etDrawable, 0xFFFFFFFF);
+        setCornerRadiusMethod.invoke(etDrawable, 25f);
+        setStrokeMethod.invoke(etDrawable, 2, 0xFFE0E0E0); 
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+            inputEt.setBackground((android.graphics.drawable.Drawable) etDrawable);
+        } else {
+            inputEt.setBackgroundDrawable((android.graphics.drawable.Drawable) etDrawable);
+        }
+    } catch (Exception e) {
+        android.graphics.drawable.ShapeDrawable etShape = new android.graphics.drawable.ShapeDrawable();
+        etShape.setShape(new android.graphics.drawable.shapes.RoundRectShape(
+            new float[]{25f, 25f, 25f, 25f, 25f, 25f, 25f, 25f},
+            null, null
+        ));
+        etShape.getPaint().setColor(0xFFFFFFFF);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+            inputEt.setBackground(etShape);
+        } else {
+            inputEt.setBackgroundDrawable(etShape);
+        }
+    }
+    LinearLayout.LayoutParams etParams = new LinearLayout.LayoutParams(
+        0,
+        LinearLayout.LayoutParams.WRAP_CONTENT,
+        1
+    );
+    topLayout.addView(inputEt, etParams);
+    inputEtArr[0] = inputEt;
+    
+    // ========== Spinner优化（保持原有逻辑不变） ==========
+    final Spinner typeSpinner = new Spinner(activity);
+    List<String> spinnerItems = new ArrayList<>();
+    spinnerItems.add("◀ 添加伪造");
+    spinnerItems.add("◀ 排除伪造");
+    ArrayAdapter<String> spinnerAdapter = new ArrayAdapter<String>(activity, android.R.layout.simple_spinner_item, spinnerItems) {
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            View view = super.getView(position, convertView, parent);
+            TextView tv = (TextView) view;
+            tv.setTextColor(0xFF000000);
+            tv.setTextSize(14);
+            tv.setGravity(Gravity.CENTER);
+            tv.setPadding(40, 20, 40, 20);
+            return view;
+        }
+        @Override
+        public View getDropDownView(int position, View convertView, ViewGroup parent) {
+            View view = super.getDropDownView(position, convertView, parent);
+            TextView tv = (TextView) view;
+            tv.setTextColor(0xFF000000);
+            tv.setTextSize(18);
+            tv.setGravity(Gravity.CENTER_VERTICAL);
+            tv.setPadding(20, 30, 20, 30);
+            tv.setBackgroundResource(android.R.drawable.list_selector_background);
+            return view;
+        }
+    };
+    spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+    typeSpinner.setAdapter(spinnerAdapter);
+    typeSpinner.setSelection(0);
+    try {
+        Class<?> gradientDrawableClass = Class.forName("android.graphics.drawable.GradientDrawable");
+        Object spinnerDrawable = gradientDrawableClass.newInstance();
+        Method setColorMethod = gradientDrawableClass.getDeclaredMethod("setColor", int.class);
+        Method setCornerRadiusMethod = gradientDrawableClass.getDeclaredMethod("setCornerRadius", float.class);
+        Method setStrokeMethod = gradientDrawableClass.getDeclaredMethod("setStroke", int.class, int.class);
+        
+        setColorMethod.invoke(spinnerDrawable, 0xFFF5F5F5);
+        setCornerRadiusMethod.invoke(spinnerDrawable, 25f);
+        setStrokeMethod.invoke(spinnerDrawable, 2, 0xFFE0E0E0);
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+            typeSpinner.setBackground((android.graphics.drawable.Drawable) spinnerDrawable);
+        } else {
+            typeSpinner.setBackgroundDrawable((android.graphics.drawable.Drawable) spinnerDrawable);
+        }
+    } catch (Exception e) {
+        android.graphics.drawable.ShapeDrawable shapeDrawable = new android.graphics.drawable.ShapeDrawable();
+        shapeDrawable.setShape(new android.graphics.drawable.shapes.RoundRectShape(
+            new float[]{25f, 25f, 25f, 25f, 25f, 25f, 25f, 25f},
+            null, null
+        ));
+        shapeDrawable.getPaint().setColor(0xFFF5F5F5);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+            typeSpinner.setBackground(shapeDrawable);
+        } else {
+            typeSpinner.setBackgroundDrawable(shapeDrawable);
+        }
+    }
+    typeSpinner.setPadding(40, 20, 20, 20);
+    LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.WRAP_CONTENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT
+    );
+    spinnerParams.leftMargin = 10;
+    spinnerParams.width = (int) (activity.getResources().getDisplayMetrics().density * 150);
+    topLayout.addView(typeSpinner, spinnerParams);
+    
+    // ========== 添加按钮（保持原有逻辑不变） ==========
+    Button addBtn = new Button(activity);
+    addBtn.setText("添加");
+    addBtn.setPadding(40, 20, 40, 20);
+    addBtn.setTextColor(0xFFFFFFFF);
+    addBtn.setBackgroundTintMode(null);
+    addBtn.setOutlineProvider(null);
+    try {
+      Class<?> gradientDrawableClass = Class.forName("android.graphics.drawable.GradientDrawable");
+      Object addBtnDrawable = gradientDrawableClass.newInstance();
+      Method setColorMethod = gradientDrawableClass.getDeclaredMethod("setColor", int.class);
+      Method setCornerRadiusMethod = gradientDrawableClass.getDeclaredMethod("setCornerRadius", float.class);
+      setColorMethod.invoke(addBtnDrawable, 0xAA4CAF50);
+      setCornerRadiusMethod.invoke(addBtnDrawable, 25f);
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+        addBtn.setBackground((android.graphics.drawable.Drawable) addBtnDrawable);
+      } else {
+        addBtn.setBackgroundDrawable((android.graphics.drawable.Drawable) addBtnDrawable);
+      }
+    } catch (Exception e) {
+      android.graphics.drawable.ShapeDrawable shapeDrawable = new android.graphics.drawable.ShapeDrawable();
+      shapeDrawable.setShape(new android.graphics.drawable.shapes.RoundRectShape(
+        new float[] { 25f, 25f, 25f, 25f, 25f, 25f, 25f, 25f },
+        null,
+        null
+      ));
+      shapeDrawable.getPaint().setColor(0xAA4CAF50);
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+        addBtn.setBackground(shapeDrawable);
+      } else {
+        addBtn.setBackgroundDrawable(shapeDrawable);
+      }
+    }
+    LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
+      LinearLayout.LayoutParams.WRAP_CONTENT,
+      LinearLayout.LayoutParams.WRAP_CONTENT
+    );
+    btnParams.leftMargin = 15;
+    topLayout.addView(addBtn, btnParams);
+    
+    // 2. 中间：包名列表（重点修复提示显示问题）
+    final int maxScrollHeight = (int) (metrics.heightPixels * 0.5);
+    ScrollView adaptiveScrollView = new ScrollView(activity) {
+      @Override
+      protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        heightMeasureSpec = MeasureSpec.makeMeasureSpec(
+          maxScrollHeight,
+          MeasureSpec.AT_MOST
+        );
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+      }
+    };
+    adaptiveScrollView.setPadding(0, 0, 0, 0);
+    // 包名列表容器（关键修复：设置背景色+强制垂直排列）
+    final LinearLayout packagesLayout = new LinearLayout(activity);
+    packagesLayout.setOrientation(LinearLayout.VERTICAL);
+    packagesLayout.setBackgroundColor(0xFFFFFFFF); // 白色背景，避免透明覆盖
+    packagesLayout.setPadding(10, 10, 10, 10); // 整体内边距
+    adaptiveScrollView.addView(packagesLayout);
+    packagesLayoutArr[0] = packagesLayout;
+
+    // 原有提示文本（强化样式）
+    TextView tipTv = new TextView(activity);
+    tipTv.setText("请准确输入需要伪造的包名,否则伪造失效\n批量输入:一行一个换行或中英文(逗号分号)");
+    tipTv.setPadding(30, 20, 30, 10); // 增大上下内边距
+    tipTv.setTextSize(12); // 放大文字
+    tipTv.setTextColor(0xFFFF5722); // 橙色，醒目
+    packagesLayout.addView(tipTv);
+    packagesLayout.requestLayout(); // 强制刷新
+/*
+    // 批量输入提示文本（强化样式）
+    TextView batchTipTv = new TextView(activity);
+    batchTipTv.setText("批量输入支持：换行、英文逗号(,)、中文逗号（，）、英文分号(;)、中文分号（；）");
+    batchTipTv.setPadding(30, 10, 30, 20); // 增大上下内边距
+    batchTipTv.setTextSize(11); // 放大文字
+    batchTipTv.setTextColor(0xFF2196F3); // 蓝色，辨识度高
+    batchTipTv.setGravity(Gravity.START);
+    packagesLayout.addView(batchTipTv);
+    packagesLayout.requestLayout(); // 强制刷新
+*/
+    // 延迟刷新包名列表，确保提示先显示
+    new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+      @Override
+      public void run() {
+        refreshPackagesLayout(packagesLayout, userPackages, activity);
+        packagesLayout.requestLayout(); // 最终刷新
+      }
+    }, 100);
+    
+    // 3. 对话框总布局（保持原有逻辑，增加整体内边距）
+    LinearLayout totalLayout = new LinearLayout(activity);
+    totalLayout.setOrientation(LinearLayout.VERTICAL);
+    totalLayout.setPadding(20, 20, 20, 20); // 增大整体内边距
+    totalLayout.setBackgroundColor(0xFFFFFFFF); // 总布局背景色
+    totalLayout.addView(topLayout);
+    totalLayout.addView(
+      adaptiveScrollView,
+      new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT
+      )
+    );
+    
+    // 4. 构建对话框（保持原有逻辑不变）
+    final AlertDialog dialog = createBoundedDialog(
+      activity,
+      "添加自定义包名",
+      "",
+      new String[] { "一键清空", "保存", "取消" },
+      new DialogInterface.OnClickListener[] {
+        new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface dialogInterface, int which) {
+            if (userPackages == null || userPackages.isEmpty()) {
+              Toast.makeText(activity, "当前无已添加包名，无需清空", Toast.LENGTH_SHORT).show();
+              return;
+            }
+            AlertDialog confirmDialog = createBoundedDialog(
+              activity,
+              "确认清空",
+              "确定要清空所有手动添加的包名吗？<br><br><font color='#F44336'>此操作不可恢复！</font>",
+              new String[] { "确认清空", "取消" },
+              new DialogInterface.OnClickListener[] {
+                new DialogInterface.OnClickListener() {
+                  @Override
+                  public void onClick(DialogInterface d, int which) {
+                    userPackages.clear();
+                    excludedPackagesMap.put(targetApp, new ArrayList<>());
+                    synchronized (globalCapturedPackages) {
+                      globalCapturedPackages.removeAll(userDefinedPackagesMap.get(targetApp));
+                    }
+                    refreshPackagesLayout(packagesLayoutArr[0], userPackages, activity);
+                    Toast.makeText(activity, "✅ 已清空所有手动添加的包名", Toast.LENGTH_SHORT).show();
+                    d.dismiss();
+                  }
+                },
+                new DialogInterface.OnClickListener() {
+                  @Override
+                  public void onClick(DialogInterface d, int which) {
+                    d.dismiss();
+                  }
+                },
+              }
+            );
+            confirmDialog.show();
+          }
+        },
+        new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface dialogInterface, int which) {
+            if (userPackages == null || userPackages.isEmpty()) {
+              Toast.makeText(activity, "当前无已添加包名，无需保存", Toast.LENGTH_SHORT).show();
+              return;
+            }
+            saveConfigToFile();
+            Toast.makeText(activity, "配置已保存", Toast.LENGTH_SHORT).show();
+            dialogInterface.dismiss();
+          }
+        },
+        new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface dialogInterface, int which) {
+            dialogInterface.dismiss();
+          }
+        },
+      },
+      totalLayout
+    );
+    
+    // 对话框显示优化（强制设置布局参数）
+    dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+      @Override
+      public void onShow(DialogInterface dialogInterface) {
+        final Window window = dialog.getWindow();
+        if (window != null) {
+          WindowManager.LayoutParams params = window.getAttributes();
+          params.height = WindowManager.LayoutParams.WRAP_CONTENT;
+          params.width = WindowManager.LayoutParams.MATCH_PARENT;
+          params.gravity = Gravity.CENTER;
+          window.setAttributes(params);
+          // 强制刷新对话框布局
+          window.getDecorView().requestLayout();
+        }
+      }
+    });
+    
+    // 5. 添加按钮点击事件（保持批量输入逻辑不变）
+    addBtn.setOnClickListener(
+      new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+          final String input = inputEt.getText().toString().trim();
+          if (input.isEmpty()) {
+            Toast.makeText(activity, "请输入有效包名", Toast.LENGTH_SHORT).show();
+            return;
+          }
+
+          Set<String> pkgSet = new HashSet<>();
+          String[] splits = input.split("[\\n,，;；]+");
+          for (String pkg : splits) {
+            String trimmedPkg = pkg.trim();
+            if (!trimmedPkg.isEmpty() && isValidPackageName(trimmedPkg)) {
+              pkgSet.add(trimmedPkg);
+            }
+          }
+
+          final List<String> pkgList = new ArrayList<>(pkgSet);
+          if (pkgList.isEmpty()) {
+            Toast.makeText(activity, "未识别到有效包名", Toast.LENGTH_SHORT).show();
+            return;
+          }
+
+          if (input.contains(" ")) {
+            AlertDialog spaceDialog = createBoundedDialog(
+              activity,
+              "检测到空格",
+              "",
+              new String[] { "去除空格", "强制添加" },
+              
+              new DialogInterface.OnClickListener[] {
+                new DialogInterface.OnClickListener() {
+                  @Override
+                  public void onClick(DialogInterface d, int which) {
+                    List<String> processedList = new ArrayList<>();
+                    for (String pkg : pkgList) {
+                      processedList.add(pkg.replaceAll(" ", ""));
+                    }
+                    Set<String> processedSet = new HashSet<>(processedList);
+                    processedList = new ArrayList<>(processedSet);
+                    int selectedType = typeSpinner.getSelectedItemPosition();
+                    batchHandlePackageAdd(processedList, userPackages, packagesLayout, activity, selectedType);
+                    inputEt.setText("");
+                  }
+                },
+                new DialogInterface.OnClickListener() {
+                  @Override
+                  public void onClick(DialogInterface d, int which) {
+                    int selectedType = typeSpinner.getSelectedItemPosition();
+                    batchHandlePackageAdd(pkgList, userPackages, packagesLayout, activity, selectedType);
+                    inputEt.setText("");
+                  }
+                },
+              }
+            );
+            
+            spaceDialog.setMessage(Html.fromHtml(
+        "包名包含空格可能导致伪造失效，是否去除所有空格？<br><br>" +
+        "将添加 <font color='#FF5722'><b>" + pkgList.size() + "</b></font> 个包名。"
+    ));
+            spaceDialog.show();
+            return;
+          }
+
+          int selectedType = typeSpinner.getSelectedItemPosition();
+          batchHandlePackageAdd(pkgList, userPackages, packagesLayout, activity, selectedType);
+          inputEt.setText("");
+        }
+      }
+    );
+    
+    dialog.show();
+  } catch (Throwable t) {
+    log("显示添加包名对话框异常: " + t.getMessage());
+  }
+}
+
+// 批量处理包名添加（保持原有逻辑不变）
+private void batchHandlePackageAdd(List<String> pkgList, List<String> userPackages, LinearLayout packagesLayout, Activity activity, int selectedType) {
+  int successCount = 0;
+  synchronized (globalCapturedPackages) {
+    List<String> excludedPackages = excludedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+    for (String pkg : pkgList) {
+      if (pkg == null || pkg.isEmpty() || !isValidPackageName(pkg)) {
+        continue;
+      }
+      if (userPackages.contains(pkg)) {
+        continue;
+      }
+
+      if (selectedType == 0) {
+        if (excludedPackages.contains(pkg)) {
+          excludedPackages.remove(pkg);
+        }
+        userPackages.add(pkg);
+        if (!globalCapturedPackages.contains(pkg)) {
+          globalCapturedPackages.add(pkg);
+        }
+        successCount++;
+      } else {
+        if (globalCapturedPackages.contains(pkg)) {
+          globalCapturedPackages.remove(pkg);
+        }
+        userPackages.add(pkg);
+        excludedPackages.add(pkg);
+        excludedPackagesMap.put(currentTargetApp, excludedPackages);
+        successCount++;
+      }
+    }
+  }
+
+  refreshPackagesLayout(packagesLayout, userPackages, activity);
+  Toast.makeText(
+    activity,
+    "处理完成：成功添加 " + successCount + "/" + pkgList.size() + " 个包名",
+    Toast.LENGTH_LONG
+  ).show();
+}
+
+
+
+
+// 辅助方法：处理包名添加（区分伪造/排除）
+private void handlePackageAdd(String pkg, List<String> userPackages, LinearLayout packagesLayout, Activity activity, int selectedType) {
+  // 1. 校验包名格式
+  if (pkg == null || pkg.isEmpty() || !isValidPackageName(pkg)) {
+    Toast.makeText(activity, "包名格式无效", Toast.LENGTH_SHORT).show();
+    return;
+  }
+  // 2. 同步锁覆盖全流程（避免并发冲突）
+  synchronized (globalCapturedPackages) {
+    // 3. 锁内双重去重校验（用户列表 + 全局列表）
+    if (userPackages.contains(pkg)) {
+      Toast.makeText(activity, "包名已存在，无需重复添加", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    // 4. 根据选择类型处理
+    List<String> excludedPackages = excludedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+    if (selectedType == 0) { // 添加伪造
+      if (excludedPackages.contains(pkg)) {
+        excludedPackages.remove(pkg); // 从排除列表移除，避免冲突
+      }
+      userPackages.add(pkg);
+      if (!globalCapturedPackages.contains(pkg)) {
+        globalCapturedPackages.add(pkg);
+      }
+      Toast.makeText(activity, "已添加伪造包名：" + pkg, Toast.LENGTH_SHORT).show();
+    } else { // 排除伪造
+      if (globalCapturedPackages.contains(pkg)) {
+        globalCapturedPackages.remove(pkg); // 从全局捕获列表移除
+      }
+      userPackages.add(pkg);
+      excludedPackages.add(pkg);
+      excludedPackagesMap.put(currentTargetApp, excludedPackages);
+      Toast.makeText(activity, "已添加排除包名：" + pkg, Toast.LENGTH_SHORT).show();
+    }
+  }
+  // 5. 刷新包名列表显示
+  refreshPackagesLayout(packagesLayout, userPackages, activity);
+}
+
+// 刷新包名列表（紧凑布局，区分伪造/排除）
+private void refreshPackagesLayout(
+  final LinearLayout packagesLayout,
+  final List<String> userPackages,
+  final Activity activity
+) {
+  // 1. 移除原有所有子视图（保留提示文本）
+  for (int i = packagesLayout.getChildCount() - 1; i >= 1; i--) {
+    packagesLayout.removeViewAt(i);
+  }
+
+  // 2. 分离伪造包名和排除包名
+  List<String> fakePackages = new ArrayList<>(); // 伪造包名列表
+  List<String> excludePackages = new ArrayList<>(); // 排除包名列表
+  List<String> excludedGlobal = excludedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+  
+  for (String pkg : userPackages) {
+    if (excludedGlobal.contains(pkg)) {
+      excludePackages.add(pkg); // 属于排除包，加入排除列表
+    } else {
+      fakePackages.add(pkg); // 属于伪造包，加入伪造列表
+    }
+  }
+
+  // 3. 显示伪造包名（上方区域）
+  if (!fakePackages.isEmpty()) {
+    // 伪造包标题
+    TextView fakeTitle = new TextView(activity);
+    fakeTitle.setText("📌 伪造包名（" + fakePackages.size() + "个）");
+    fakeTitle.setPadding(30, 15, 30, 10);
+    fakeTitle.setTextSize(13);
+    fakeTitle.setTextColor(0xFF4CAF50);
+    packagesLayout.addView(fakeTitle);
+
+    // 渲染伪造包列表
+    for (int i = 0; i < fakePackages.size(); i++) {
+      final int pos = userPackages.indexOf(fakePackages.get(i)); // 原始索引（用于删除）
+      final String pkg = fakePackages.get(i);
+      // 包名项布局
+      LinearLayout itemLayout = new LinearLayout(activity);
+      itemLayout.setOrientation(LinearLayout.HORIZONTAL);
+      itemLayout.setPadding(30, 8, 30, 8);
+      itemLayout.setGravity(Gravity.CENTER_VERTICAL);
+
+      TextView pkgTv = new TextView(activity);
+      pkgTv.setText((i + 1) + ". [伪造] " + pkg); // 伪造标签
+      pkgTv.setPadding(0, 5, 0, 5);
+      pkgTv.setTextSize(13);
+      pkgTv.setSingleLine(false);
+      pkgTv.setMaxLines(2);
+      pkgTv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+      LinearLayout.LayoutParams pkgParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+      itemLayout.addView(pkgTv, pkgParams);
+
+      // 删除按钮
+      Button delBtn = new Button(activity);
+      delBtn.setText("删除");
+      delBtn.setTextSize(11);
+      delBtn.setPadding(20, 5, 20, 5);
+      try {
+        Class<?> gradientDrawableClass = Class.forName(
+          "android.graphics.drawable.GradientDrawable"
+        );
+        Object delBtnDrawable = gradientDrawableClass.newInstance();
+        Method setColorMethod = gradientDrawableClass.getMethod(
+          "setColor",
+          int.class
+        );
+        Method setCornerRadiusMethod = gradientDrawableClass.getMethod(
+          "setCornerRadius",
+          float.class
+        );
+        setColorMethod.invoke(delBtnDrawable, 0xAAF44336);
+        setCornerRadiusMethod.invoke(delBtnDrawable, 25f);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+          delBtn.setBackground(
+            (android.graphics.drawable.Drawable) delBtnDrawable
+          );
+        } else {
+          delBtn.setBackgroundDrawable(
+            (android.graphics.drawable.Drawable) delBtnDrawable
+          );
+        }
+        delBtn.setTextColor(0xFFFFFFFF);
+        delBtn.setBackgroundTintMode(null);
+        delBtn.setOutlineProvider(null);
+      } catch (Throwable e) {
+        android.graphics.drawable.ShapeDrawable shapeDrawable =
+          new android.graphics.drawable.ShapeDrawable();
+        shapeDrawable.setShape(
+          new android.graphics.drawable.shapes.RoundRectShape(
+            new float[] { 25f, 25f, 25f, 25f, 25f, 25f, 25f, 25f },
+            null,
+            null
+          )
+        );
+        shapeDrawable.getPaint().setColor(0xAAF44336);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+          delBtn.setBackground(shapeDrawable);
+        } else {
+          delBtn.setBackgroundDrawable(shapeDrawable);
+        }
+      }
+      delBtn.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+          userPackages.remove(pos);
+          List<String> excludedGlobal = excludedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+          excludedGlobal.remove(pkg);
+          excludedPackagesMap.put(currentTargetApp, excludedGlobal);
+          synchronized (globalCapturedPackages) {
+            globalCapturedPackages.remove(pkg);
+          }
+          refreshPackagesLayout(packagesLayout, userPackages, activity);
+          Toast.makeText(activity, "已删除伪造包名：" + pkg, Toast.LENGTH_SHORT).show();
+        }
+      });
+      itemLayout.addView(delBtn);
+
+      packagesLayout.addView(itemLayout);
+      // 分割线（伪造包之间）
+      if (i != fakePackages.size() - 1) {
+        View divider = new View(activity);
+        divider.setBackgroundColor(0xFFE0E0E0);
+        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1);
+        dividerParams.topMargin = 8;
+        packagesLayout.addView(divider, dividerParams);
+      }
+    }
+  }
+
+  // 4. 添加分割线（区分伪造和排除包）
+  if (!fakePackages.isEmpty() && !excludePackages.isEmpty()) {
+    View mainDivider = new View(activity);
+    mainDivider.setBackgroundColor(0xFF999999);
+    LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 2);
+    dividerParams.topMargin = 15;
+    dividerParams.bottomMargin = 15;
+    packagesLayout.addView(mainDivider, dividerParams);
+  }
+
+  // 5. 显示排除包名（下方区域）
+  if (!excludePackages.isEmpty()) {
+    // 排除包标题
+    TextView excludeTitle = new TextView(activity);
+    excludeTitle.setText("❌ 排除包名（" + excludePackages.size() + "个）");
+    excludeTitle.setPadding(30, 15, 30, 10);
+    excludeTitle.setTextSize(13);
+    excludeTitle.setTextColor(0xFFF44336);
+    packagesLayout.addView(excludeTitle);
+
+    // 渲染排除包列表
+    for (int i = 0; i < excludePackages.size(); i++) {
+      final int pos = userPackages.indexOf(excludePackages.get(i)); // 原始索引（用于删除）
+      final String pkg = excludePackages.get(i);
+      // 包名项布局
+      LinearLayout itemLayout = new LinearLayout(activity);
+      itemLayout.setOrientation(LinearLayout.HORIZONTAL);
+      itemLayout.setPadding(30, 8, 30, 8);
+      itemLayout.setGravity(Gravity.CENTER_VERTICAL);
+
+      TextView pkgTv = new TextView(activity);
+      pkgTv.setText((i + 1) + ". [排除] " + pkg); // 排除标签
+      pkgTv.setPadding(0, 5, 0, 5);
+      pkgTv.setTextSize(13);
+      pkgTv.setSingleLine(false);
+      pkgTv.setMaxLines(2);
+      pkgTv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+      LinearLayout.LayoutParams pkgParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+      itemLayout.addView(pkgTv, pkgParams);
+
+      // 删除按钮
+      Button delBtn = new Button(activity);
+      delBtn.setText("删除");
+      delBtn.setTextSize(11);
+      delBtn.setPadding(20, 5, 20, 5);
+      try {
+        Class<?> gradientDrawableClass = Class.forName(
+          "android.graphics.drawable.GradientDrawable"
+        );
+        Object delBtnDrawable = gradientDrawableClass.newInstance();
+        Method setColorMethod = gradientDrawableClass.getMethod(
+          "setColor",
+          int.class
+        );
+        Method setCornerRadiusMethod = gradientDrawableClass.getMethod(
+          "setCornerRadius",
+          float.class
+        );
+        setColorMethod.invoke(delBtnDrawable, 0xAAF44336);
+        setCornerRadiusMethod.invoke(delBtnDrawable, 25f);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+          delBtn.setBackground(
+            (android.graphics.drawable.Drawable) delBtnDrawable
+          );
+        } else {
+          delBtn.setBackgroundDrawable(
+            (android.graphics.drawable.Drawable) delBtnDrawable
+          );
+        }
+        delBtn.setTextColor(0xFFFFFFFF);
+        delBtn.setBackgroundTintMode(null);
+        delBtn.setOutlineProvider(null);
+      } catch (Throwable e) {
+        android.graphics.drawable.ShapeDrawable shapeDrawable =
+          new android.graphics.drawable.ShapeDrawable();
+        shapeDrawable.setShape(
+          new android.graphics.drawable.shapes.RoundRectShape(
+            new float[] { 25f, 25f, 25f, 25f, 25f, 25f, 25f, 25f },
+            null,
+            null
+          )
+        );
+        shapeDrawable.getPaint().setColor(0xAAF44336);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+          delBtn.setBackground(shapeDrawable);
+        } else {
+          delBtn.setBackgroundDrawable(shapeDrawable);
+        }
+      }
+      delBtn.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+          userPackages.remove(pos);
+          List<String> excludedGlobal = excludedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+          excludedGlobal.remove(pkg);
+          excludedPackagesMap.put(currentTargetApp, excludedGlobal);
+          synchronized (globalCapturedPackages) {
+            globalCapturedPackages.remove(pkg);
+          }
+          refreshPackagesLayout(packagesLayout, userPackages, activity);
+          Toast.makeText(activity, "已删除排除包名：" + pkg, Toast.LENGTH_SHORT).show();
+        }
+      });
+      itemLayout.addView(delBtn);
+
+      packagesLayout.addView(itemLayout);
+      // 分割线（排除包之间）
+      if (i != excludePackages.size() - 1) {
+        View divider = new View(activity);
+        divider.setBackgroundColor(0xFFE0E0E0);
+        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1);
+        dividerParams.topMargin = 8;
+        packagesLayout.addView(divider, dividerParams);
+      }
+    }
+  }
+
+  // 6. 空列表提示（无伪造+无排除包时）
+  if (fakePackages.isEmpty() && excludePackages.isEmpty()) {
+    TextView emptyTv = new TextView(activity);
+    emptyTv.setText("暂无已添加包名");
+    emptyTv.setPadding(30, 15, 30, 15);
+    emptyTv.setTextSize(12);
+    packagesLayout.addView(emptyTv);
+  }
+}
+
+
+  // 包名添加方法
+  private void addPackageToList(
+    String pkg,
+    List<String> userPackages,
+    LinearLayout packagesLayout,
+    Activity activity
+  ) {
+    // 1. 复用已有方法校验包名格式（无需新增，直接调用）
+    if (pkg == null || pkg.isEmpty() || !isValidPackageName(pkg)) {
+      Toast.makeText(activity, "包名格式无效", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    // 2. 同步锁覆盖全流程（避免并发冲突，核心修复）
+    synchronized (globalCapturedPackages) {
+      // 3. 锁内双重去重校验（用户列表 + 全局列表）
+      if (userPackages.contains(pkg) || globalCapturedPackages.contains(pkg)) {
+        Toast.makeText(
+          activity,
+          "包名已存在，无需重复添加",
+          Toast.LENGTH_SHORT
+        ).show();
+        return;
+      }
+      // 4. 无重复则同步添加（确保用户列表和全局列表一致）
+      userPackages.add(pkg);
+      globalCapturedPackages.add(pkg);
+    }
+    // 5. 刷新包名列表显示
+    refreshPackagesLayout(packagesLayout, userPackages, activity);
+    // 6. 仅添加成功后提示（避免矛盾）
+    Toast.makeText(activity, "已添加：" + pkg, Toast.LENGTH_SHORT).show();
+  }
+
+  // 带包名的清理询问弹窗（支持选择清理范围）
+  private void showClearConfirmDialog(
+  final Activity activity,
+  final View floatingView
+) {
+  List<String> userPackages = userDefinedPackagesMap.getOrDefault(
+    currentTargetApp,
+    new ArrayList<>()
+  );
+  StringBuilder pkgText = new StringBuilder();
+  pkgText.append("检测到 <font color='#FF5722'><b>" + userPackages.size() + "</b></font> 个手动添加的包名<br>"); // 标题后换行
+  for (int i = 0; i < userPackages.size(); i++) {
+    pkgText
+      .append((i + 1))
+      .append(". ")
+      .append(userPackages.get(i))
+      .append("<br>"); // 每个包名后换行
+  }
+  pkgText.append(
+    "<br>==============<br>" // 分隔线+换行
+    + "是否需要同步清空？<br><br>" // 换行
+    + "同步清空：清理自动捕获包名+手动添加包名 <font color='#FF5722'><b>" + userPackages.size() + "</b></font> 个<br>" // 换行
+    + "单独留下：仅清空自动捕获的包名"
+  );
+ 
+    AlertDialog dialog = createBoundedDialog(
+      activity,
+      "清理包名",
+      pkgText.toString(),
+      new String[] { "同步清空", "单独留下(" + userPackages.size() + ")", "取消" },
+      new DialogInterface.OnClickListener[] {
+        new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface dialog, int which) {
+            clearAllPackageLists(activity, floatingView);
+            dialog.dismiss();
+          }
+        },
+        new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface dialog, int which) {
+            clearAutoCapturedPackagesOnly(activity, floatingView);
+            dialog.dismiss();
+          }
+        },
+        new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface dialog, int which) {
+            dialog.dismiss();
+          }
+        },
+      }
+    );
+
+    dialog.show();
+  }
+
+  // 仅清理自动捕获的包，保留手动添加的包
+  private void clearAutoCapturedPackagesOnly(
+    final Activity activity,
+    final View floatingView
+  ) {
+    try {
+      List<String> userPackages = userDefinedPackagesMap.getOrDefault(
+        currentTargetApp,
+        new ArrayList<>()
+      );
+      // 1. 清空全局捕获包列表中“非手动添加”的包（保留手动添加的）
+      synchronized (globalCapturedPackages) {
+        Iterator<String> iterator = globalCapturedPackages.iterator();
+        while (iterator.hasNext()) {
+          String pkg = iterator.next();
+          if (!userPackages.contains(pkg)) {
+            iterator.remove(); // 仅移除自动捕获的包
+          }
+        }
+      }
+      // 2. 清空当前应用的自动捕获包列表
+      appCapturedPackages.clear();
+      // 3. 清空拦截模式中“非手动添加”的包
+      List<InterceptPattern> patterns = interceptPatternsMap.get(
+        currentTargetApp
+      );
+      if (patterns != null) {
+        for (InterceptPattern pattern : patterns) {
+          Iterator<String> installedIt = pattern.installedPackages.iterator();
+          while (installedIt.hasNext()) {
+            if (!userPackages.contains(installedIt.next())) {
+              installedIt.remove();
+            }
+          }
+          Iterator<String> notInstalledIt =
+            pattern.notInstalledPackages.iterator();
+          while (notInstalledIt.hasNext()) {
+            if (!userPackages.contains(notInstalledIt.next())) {
+              notInstalledIt.remove();
+            }
+          }
+        }
+      }
+      // 4. 重置智能伪造缓存（仅清空自动捕获包的缓存）
+      clearAutoCapturedCache(userPackages);
+      // 5. 保存配置
+      saveConfigToFile();
+      showRefreshConfirmDialog(activity, null); //刷新应用
+      // 6. 显示提示
+      Toast.makeText(
+        activity,
+        "✅ 仅清理自动捕获的包，保留手动添加的包",
+        Toast.LENGTH_LONG
+      ).show();
+    } catch (Throwable t) {
+      log("仅清理自动捕获包异常: " + t.getMessage());
+      Toast.makeText(activity, "清理失败", Toast.LENGTH_SHORT).show();
+    }
+  }
+
+  // 辅助方法：仅清空自动捕获包的伪造缓存（保留手动添加包的缓存）
+  private void clearAutoCapturedCache(List<String> userPackages) {
+    try {
+      // 遍历缓存，仅移除非手动添加的包的缓存
+      Iterator<Map.Entry<String, String>> versionIt = versionCache
+        .entrySet()
+        .iterator();
+      while (versionIt.hasNext()) {
+        if (!userPackages.contains(versionIt.next().getKey())) {
+          versionIt.remove();
+        }
+      }
+      Iterator<Map.Entry<String, Integer>> versionCodeIt = versionCodeCache
+        .entrySet()
+        .iterator();
+      while (versionCodeIt.hasNext()) {
+        if (!userPackages.contains(versionCodeIt.next().getKey())) {
+          versionCodeIt.remove();
+        }
+      }
+      Iterator<Map.Entry<String, Long>> installTimeIt = installTimeCache
+        .entrySet()
+        .iterator();
+      while (installTimeIt.hasNext()) {
+        if (!userPackages.contains(installTimeIt.next().getKey())) {
+          installTimeIt.remove();
+        }
+      }
+      Iterator<Map.Entry<String, String>> installerIt = installerCache
+        .entrySet()
+        .iterator();
+      while (installerIt.hasNext()) {
+        if (!userPackages.contains(installerIt.next().getKey())) {
+          installerIt.remove();
+        }
+      }
+      Iterator<Map.Entry<String, String>> appNameIt = appNameCache
+        .entrySet()
+        .iterator();
+      while (appNameIt.hasNext()) {
+        if (!userPackages.contains(appNameIt.next().getKey())) {
+          appNameIt.remove();
+        }
+      }
+      // 清空查询模式记录
+      queryPatterns.clear();
+    } catch (Throwable t) {
+      log("清理自动捕获缓存异常: " + t.getMessage());
+    }
+  }
+
   // 创建标识
   private TextView createFloatingView(final Activity activity) {
     try {
@@ -1767,7 +3487,10 @@ public class HookInit implements IXposedHookLoadPackage {
       final boolean status = currentStatus != null ? currentStatus : true;
       String statusText = status ? "已安装" : "未安装";
       // 获取拦截状态标识
-      boolean isBlockingExit = blockExitMap.getOrDefault(currentTargetApp, false);
+      boolean isBlockingExit = blockExitMap.getOrDefault(
+        currentTargetApp,
+        false
+      );
       String blockText = isBlockingExit ? "[拦截]" : "";
       floatingView.setText("伪造安装(" + statusText + ")" + blockText);
       floatingView.setTextSize(14);
@@ -1807,12 +3530,20 @@ public class HookInit implements IXposedHookLoadPackage {
         new View.OnTouchListener() {
           private float startX, startY;
           private float initialX, initialY;
-          private long touchStartTime;
           private boolean isDragging = false;
           private boolean longPressTriggered = false;
-          private final int DRAG_THRESHOLD = 50;
-          private final long LONG_PRESS_TIME = 600;
+          private final int DRAG_THRESHOLD = 50; //拖动抖动
+          private final long LONG_PRESS_TIME = 300; //长按触发时间
           private Handler longPressHandler;
+
+          // 双击检测相关变量
+          private long firstClickTime = 0;
+          private int clickCount = 0;
+          private Handler clickHandler = new Handler();
+          private static final int DOUBLE_CLICK_DELAY = 300; //匹配单击触发时间
+
+          // 新增：标记当前是否正在处理单击
+          private boolean isClickHandled = false;
 
           @Override
           public boolean onTouch(final View v, MotionEvent event) {
@@ -1823,15 +3554,73 @@ public class HookInit implements IXposedHookLoadPackage {
                   startY = event.getRawY();
                   initialX = v.getX();
                   initialY = v.getY();
-                  touchStartTime = System.currentTimeMillis();
                   isDragging = false;
                   longPressTriggered = false;
+                  isClickHandled = false; // 重置标记
+
+                  // 双击检测逻辑
+                  long currentTime = System.currentTimeMillis();
+                  if (currentTime - firstClickTime < DOUBLE_CLICK_THRESHOLD) {
+                    clickCount++;
+                    // 移除之前的单击任务
+                    clickHandler.removeCallbacksAndMessages(null);
+                    isClickHandled = false;
+
+                    if (clickCount == 2) {
+                      // 双击触发
+                      clickCount = 0;
+                      firstClickTime = 0;
+                      // 弹出添加包名对话框
+                      showAddPackageDialog(activity);
+                      return true;
+                    }
+                  } else {
+                    clickCount = 1;
+                    firstClickTime = currentTime;
+                  }
+
+                  // 延迟执行单击（给双击留时间）
+                  clickHandler.postDelayed(
+                    new Runnable() {
+                      @Override
+                      public void run() {
+                        // 关键：只有不是长按、拖拽，且单击未被处理时才执行
+                        if (
+                          clickCount == 1 &&
+                          !longPressTriggered &&
+                          !isDragging &&
+                          !isClickHandled
+                        ) {
+                          isClickHandled = true;
+                          showStatusSwitchDialog(activity, floatingView);
+                          clickCount = 0;
+                          firstClickTime = 0;
+                        }
+                      }
+                    },
+                    DOUBLE_CLICK_DELAY
+                  );
+
+                  // 长按检测
                   longPressHandler = new Handler();
                   longPressHandler.postDelayed(
                     new Runnable() {
                       @Override
                       public void run() {
+                        // 关键：长按触发时，取消单击任务并标记
+                        clickHandler.removeCallbacksAndMessages(null);
                         longPressTriggered = true;
+                        isClickHandled = true; // 标记单击已被处理
+                        clickCount = 0;
+                        firstClickTime = 0;
+                        // 假设单击菜单弹窗是通过 showStatusSwitchDialog 显示的，需持有其引用
+                        if (
+                          statusSwitchDialog != null &&
+                          statusSwitchDialog.isShowing()
+                        ) {
+                          statusSwitchDialog.dismiss();
+                          statusSwitchDialog = null; // 重置引用
+                        }
                         showHideDialog(activity, v);
                       }
                     },
@@ -1841,15 +3630,22 @@ public class HookInit implements IXposedHookLoadPackage {
                 case MotionEvent.ACTION_MOVE:
                   float deltaX = Math.abs(event.getRawX() - startX);
                   float deltaY = Math.abs(event.getRawY() - startY);
+
                   if (
                     !isDragging &&
                     (deltaX > DRAG_THRESHOLD || deltaY > DRAG_THRESHOLD)
                   ) {
                     isDragging = true;
+                    // 拖拽时取消所有检测并标记
+                    clickHandler.removeCallbacksAndMessages(null);
                     if (longPressHandler != null) {
                       longPressHandler.removeCallbacksAndMessages(null);
                     }
+                    isClickHandled = true; // 标记单击已被处理
+                    clickCount = 0;
+                    firstClickTime = 0;
                   }
+
                   if (isDragging) {
                     float newX = initialX + (event.getRawX() - startX);
                     float newY = initialY + (event.getRawY() - startY);
@@ -1875,28 +3671,35 @@ public class HookInit implements IXposedHookLoadPackage {
                   }
                   return true;
                 case MotionEvent.ACTION_UP:
+                  // 清理长按处理器
                   if (longPressHandler != null) {
                     longPressHandler.removeCallbacksAndMessages(null);
                   }
+
+                  // 如果长按已触发，确保单击不会执行
+                  if (longPressTriggered) {
+                    clickHandler.removeCallbacksAndMessages(null);
+                    isClickHandled = true;
+                  }
+
                   floatingXMap.put(currentTargetApp, v.getX());
                   floatingYMap.put(currentTargetApp, v.getY());
-                  saveConfigToFile(); // 拖拽后保存
-                  if (
-                    !isDragging &&
-                    !longPressTriggered &&
-                    System.currentTimeMillis() - touchStartTime < 300
-                  ) {
-                    showStatusSwitchDialog(activity, floatingView);
-                  }
+                  saveConfigToFile();
+
+                  // 重置状态（保留isClickHandled直到下一次ACTION_DOWN）
                   isDragging = false;
-                  longPressTriggered = false;
                   return true;
                 case MotionEvent.ACTION_CANCEL:
+                  // 清理所有处理器和状态
+                  clickHandler.removeCallbacksAndMessages(null);
                   if (longPressHandler != null) {
                     longPressHandler.removeCallbacksAndMessages(null);
                   }
                   isDragging = false;
                   longPressTriggered = false;
+                  isClickHandled = true; // 标记为已处理，防止后续执行
+                  clickCount = 0;
+                  firstClickTime = 0;
                   return true;
               }
             } catch (Throwable t) {
@@ -1905,197 +3708,225 @@ public class HookInit implements IXposedHookLoadPackage {
             return true;
           }
 
-          // 状态切换对话框
-          private void showStatusSwitchDialog(
-            final Activity activity,
-            final TextView floatingView
-          ) {
-            try {
-              activity.runOnUiThread(
-                new Runnable() {
+          // 状态切换对话框（细分自定义包名区域+颜色区分）
+private void showStatusSwitchDialog(
+    final Activity activity,
+    final TextView floatingView
+) {
+  try {
+    activity.runOnUiThread(
+      new Runnable() {
+        @Override
+        public void run() {
+          try {
+            Boolean currentStatus = installStatusMap.get(
+              currentTargetApp
+            );
+            final boolean status = currentStatus != null
+              ? currentStatus
+              : true;
+            // 获取检测到的包信息（已过滤排除包）
+            DetectedPackages detected = analyzeDetectedPackages();
+            // 计算总项数（仅伪造包，不含排除包）
+            int totalPackages =
+              detected.installedPackages.size() +
+              detected.notInstalledPackages.size();
+            // 构建详细消息，包含检测到的包列表（支持HTML颜色）
+            StringBuilder messageBuilder = new StringBuilder();
+            messageBuilder
+              .append("当前状态: ")
+              .append(status ? "<font color='#4CAF50'>【已安装】</font>" : "<font color='#F44336'>【未安装】</font>")
+              .append("<br>"); // 新增换行
+            if (totalPackages > 0) {
+              messageBuilder
+                .append("捕获应用总累计：<font color='#FF5722'><b>")
+                .append(totalPackages)
+                .append("</b></font><br><br>"); // 新增换行
+              if (!detected.installedPackages.isEmpty()) {
+                messageBuilder
+                  .append("✅ 伪造已安装的包(")
+                  .append(detected.installedPackages.size())
+                  .append("项):<br>");
+                for (String pkg : detected.installedPackages) {
+                  messageBuilder
+                    .append("+ ")
+                    .append(pkg)
+                    .append("<br>"); // 每项后换行
+                }
+                messageBuilder.append("<br>"); // 列表结束后换行
+              }
+              if (!detected.notInstalledPackages.isEmpty()) {
+                messageBuilder
+                  .append("❌ 伪造未安装的包(")
+                  .append(detected.notInstalledPackages.size())
+                  .append("项):<br>");
+                for (String pkg : detected.notInstalledPackages) {
+                  messageBuilder
+                    .append("- ")
+                    .append(pkg)
+                    .append("<br>"); // 每项后换行
+                }
+                messageBuilder.append("<br>"); // 列表结束后换行
+              }
+            } else {
+              messageBuilder.append(
+                "📊 当前应用 未检测 到任何包<br><br>"
+              ); // 新增换行
+            }
+            // 拆分为2个独立区域显示用户自定义包名（带颜色区分）
+            List<String> userPackages = userDefinedPackagesMap.getOrDefault(
+              currentTargetApp,
+              new ArrayList<>()
+            );
+            // 关键：补充变量定义（之前缺失导致报错）
+            List<String> excludedPackages = excludedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+            List<String> userFakePackages = new ArrayList<>();
+            for (String pkg : userPackages) {
+              if (!excludedPackages.contains(pkg)) {
+                userFakePackages.add(pkg);
+              }
+            }
+            // 1. 手动添加的伪造包名（过滤掉已排除的包）- 绿色标题
+            if (!userFakePackages.isEmpty()) {
+              // 绿色标题（HTML格式）
+              messageBuilder
+                .append("<font color='#4CAF50'>❣️ 手动添加的伪造包名(")
+                .append(userFakePackages.size())
+                .append("项):</font><br>");
+              for (String pkg : userFakePackages) {
+                messageBuilder.append("☆ ").append(pkg).append("<br>");
+              }
+              messageBuilder.append("<br>");
+            }
+            // 2. 手动添加的排除包名 - 红色标题
+            if (!excludedPackages.isEmpty()) {
+              // 红色标题（HTML格式）
+              messageBuilder
+                .append("<font color='#F44336'>❌ 手动添加的排除包名(")
+                .append(excludedPackages.size())
+                .append("项):</font><br>");
+              for (String pkg : excludedPackages) {
+                messageBuilder.append("☆ ").append(pkg).append("<br>");
+              }
+              messageBuilder.append("<br>");
+            }
+            messageBuilder.append("请选择要切换的状态:");
+            // 创建边界安全的对话框
+            AlertDialog dialog = createBoundedDialog(
+              activity,
+              "配置切换安装状态-(小淋)",
+              messageBuilder.toString(),
+              new String[] {
+                "切换为已安装",
+                "切换为未安装",
+                "配置更多功能",
+              },
+              new DialogInterface.OnClickListener[] {
+                new DialogInterface.OnClickListener() {
                   @Override
-                  public void run() {
-                    try {
-                      Boolean currentStatus = installStatusMap.get(
-                        currentTargetApp
-                      );
-                      final boolean status = currentStatus != null
-                        ? currentStatus
-                        : true;
-
-                      // 获取检测到的包信息
-                      DetectedPackages detected = analyzeDetectedPackages();
-
-                      // 计算总项数
-                      int totalPackages =
-                        detected.installedPackages.size() +
-                        detected.notInstalledPackages.size();
-
-                      // 构建详细消息，包含检测到的包列表
-                      StringBuilder messageBuilder = new StringBuilder();
-                      messageBuilder
-                        .append("当前状态: ")
-                        .append(status ? "【已安装】" : "【未安装】")
-                        .append("");
-
-                      if (totalPackages > 0) {
-                        messageBuilder
-                          .append("\n捕获应用：总累计【")
-                          .append(totalPackages)
-                          .append("】\n");
-
-                        if (!detected.installedPackages.isEmpty()) {
-                          messageBuilder
-                            .append("\n✅ 伪造已安装的包(")
-                            .append(detected.installedPackages.size())
-                            .append("项):\n");
-                          for (String pkg : detected.installedPackages) {
-                            messageBuilder
-                              .append("+ ")
-                              .append(pkg)
-                              .append("\n");
-                          }
-                        }
-
-                        if (!detected.notInstalledPackages.isEmpty()) {
-                          messageBuilder
-                            .append("\n❌ 伪造未安装的包(")
-                            .append(detected.notInstalledPackages.size())
-                            .append("项):\n");
-                          for (String pkg : detected.notInstalledPackages) {
-                            messageBuilder
-                              .append("- ")
-                              .append(pkg)
-                              .append("\n");
-                          }
-                        }
-                        messageBuilder.append("\n");
-                      } else {
-                        messageBuilder.append(
-                          "\n📊 当前应用 未检测 到任何包\n\n"
-                        );
-                      }
-
-                      messageBuilder.append("请选择要切换的状态:");
-                      // 创建边界安全的对话框
-                      AlertDialog dialog = createBoundedDialog(
+                  public void onClick(
+                    DialogInterface dialogInterface,
+                    int which
+                  ) {
+                    if (!status) {
+                      handleStatusSwitch(
                         activity,
-                        "配置切换安装状态-(小淋)",
-                        messageBuilder.toString(),
-                        new String[] {
-                          "切换为已安装",
-                          "切换为未安装",
-                          "配置更多功能",
-                        },
-                        new DialogInterface.OnClickListener[] {
-                          new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(
-                              DialogInterface dialogInterface,
-                              int which
-                            ) {
-                              if (!status) {
-                                handleStatusSwitch(
-                                  activity,
-                                  floatingView,
-                                  true
-                                );
-                                dialogInterface.dismiss();
-                              } else {
-                                Toast.makeText(
-                                  activity,
-                                  "当前已是已安装状态",
-                                  Toast.LENGTH_SHORT
-                                ).show();
-                              }
-                            }
-                          },
-                          new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(
-                              DialogInterface dialogInterface,
-                              int which
-                            ) {
-                              if (status) {
-                                handleStatusSwitch(
-                                  activity,
-                                  floatingView,
-                                  false
-                                );
-                                dialogInterface.dismiss();
-                              } else {
-                                Toast.makeText(
-                                  activity,
-                                  "当前已是未安装状态",
-                                  Toast.LENGTH_SHORT
-                                ).show();
-                              }
-                            }
-                          },
-                          new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(
-                              DialogInterface dialogInterface,
-                              int which
-                            ) {
-                              dialogInterface.dismiss();
-                              //显示更多功能配置弹窗
-                              showMoreFunctionsDialog(activity, floatingView);
-                            }
-                          },
-                        }
+                        floatingView,
+                        true
                       );
-                      dialog.show();
-                    } catch (Throwable t) {
-                      log("显示状态切换对话框异常: " + t.getMessage());
-                      // 备用对话框
-                      showFallbackDialog(activity, floatingView, status);
+                      dialogInterface.dismiss();
+                    } else {
+                      Toast.makeText(
+                        activity,
+                        "当前已是已安装状态",
+                        Toast.LENGTH_SHORT
+                      ).show();
                     }
                   }
-                }
-              );
-            } catch (Throwable t) {
-              log("显示状态切换对话框异常: " + t.getMessage());
-            }
+                },
+                new DialogInterface.OnClickListener() {
+                  @Override
+                  public void onClick(
+                    DialogInterface dialogInterface,
+                    int which
+                  ) {
+                    if (status) {
+                      handleStatusSwitch(
+                        activity,
+                        floatingView,
+                        false
+                      );
+                      dialogInterface.dismiss();
+                    } else {
+                      Toast.makeText(
+                        activity,
+                        "当前已是未安装状态",
+                        Toast.LENGTH_SHORT
+                      ).show();
+                    }
+                  }
+                },
+                new DialogInterface.OnClickListener() {
+                  @Override
+                  public void onClick(
+                    DialogInterface dialogInterface,
+                    int which
+                  ) {
+                    dialogInterface.dismiss();
+                    //显示更多功能配置弹窗
+                    showMoreFunctionsDialog(activity, floatingView);
+                  }
+                },
+              }
+            );
+            statusSwitchDialog = dialog; //长按隐藏弹窗
+            dialog.show();
+          } catch (Throwable t) {
+            log("显示状态切换对话框异常: " + t.getMessage());
+            // 备用对话框
+            showFallbackDialog(activity, floatingView, status);
           }
+        }
+      }
+    );
+  } catch (Throwable t) {
+    log("显示状态切换对话框异常: " + t.getMessage());
+  }
+}
+
+
 
           // ========== 显示更多功能配置对话框 ==========
           private void showMoreFunctionsDialog(
-            final Activity activity,
-            final TextView floatingView
-          ) {
-            try {
-              // 获取当前状态
-              final boolean isBlockingExit = blockExitMap.getOrDefault(
-                currentTargetApp,
-                false
-              );
-              final Boolean currentPermissionFake = permissionFakeMap.get(
-                currentTargetApp
-              );
-              final boolean permissionFakeEnabled = currentPermissionFake !=
-                null
-                ? currentPermissionFake
-                : true;
-
-              // 构建消息内容
-              StringBuilder messageBuilder = new StringBuilder();
-              messageBuilder.append("当前功能状态：\n\n");
-
-              messageBuilder.append("1. 退出拦截：");
-              messageBuilder.append(isBlockingExit ? "✅ 开启" : "❌ 关闭");
-              messageBuilder.append("\n   - 拦截应用因检测到伪造包而退出\n\n");
-
-              messageBuilder.append("2. 权限伪造：");
-              messageBuilder.append(
-                permissionFakeEnabled ? "✅ 开启" : "❌ 关闭"
-              );
-              messageBuilder.append("\n   - 伪造应用检测权限为已授权\n");
-              messageBuilder.append(
-                "   - 包含：QUERY_ALL_PACKAGES、PACKAGE_USAGE_STATS等\n\n"
-              );
-
-              messageBuilder.append("请选择要配置的功能：");
+  final Activity activity,
+  final TextView floatingView
+) {
+  try {
+    // 获取当前状态
+    final boolean isBlockingExit = blockExitMap.getOrDefault(
+      currentTargetApp,
+      false
+    );
+    final Boolean currentPermissionFake = permissionFakeMap.get(
+      currentTargetApp
+    );
+    final boolean permissionFakeEnabled = currentPermissionFake !=
+      null
+      ? currentPermissionFake
+      : true;
+    // 构建消息内容（添加换行分隔）
+    StringBuilder messageBuilder = new StringBuilder();
+    messageBuilder.append("当前功能状态：<br><br>"); // 标题后换行
+    messageBuilder.append("1. 退出拦截：");
+    messageBuilder.append(isBlockingExit ? "✅ 开启" : "❌ 关闭");
+    messageBuilder.append("<br>   - 拦截应用因检测到伪造包而退出<br><br>"); // 功能说明换行+空行
+    messageBuilder.append("2. 权限伪造：");
+    messageBuilder.append(
+      permissionFakeEnabled ? "✅ 开启" : "❌ 关闭"
+    );
+    messageBuilder.append("<br>   - 伪造应用检测权限为已授权<br>"); // 换行
+    messageBuilder.append("   - 如读取应用列表、使用统计权限<br><br>"); // 换行+空行
+    messageBuilder.append("请选择要配置的功能：");
 
               // 创建对话框
               AlertDialog dialog = createBoundedDialog(
@@ -2312,23 +4143,24 @@ public class HookInit implements IXposedHookLoadPackage {
 
           // ========== 显示权限伪造刷新提示 ==========
           private void showPermissionFakeRefreshPrompt(
-            final Activity activity,
-            final boolean enabled
-          ) {
-            try {
-              String title = enabled ? "权限伪造已开启" : "权限伪造已关闭";
-              String message = enabled
-                ? "✅ 权限伪造功能已开启\n\n" +
-                "功能效果：\n" +
-                "• 读取应用列表权限时返回虚假已授权\n" +
-                "• 部分应用可能需要重启或无效\n\n" +
-                "是否立即刷新应用使设置生效？"
-                : "❌ 权限伪造功能已关闭\n\n" +
-                "功能效果：\n" +
-                "• 读取应用列表权限时返回真实状态\n" +
-                "• (比如当前应用没有“授权”,应用能检测到)\n\n" +
-                "• 部分应用可能因此拒绝运行或无效\n" +
-                "是否立即刷新应用使设置生效？";
+  final Activity activity,
+  final boolean enabled
+) {
+  try {
+    String title = enabled ? "权限伪造已开启" : "权限伪造已关闭";
+    String message = enabled
+      ? "✅ <font color='#4CAF50'>权限伪造功能已开启</font><br><br>" +
+        "功能效果：<br>" +
+        "• 读取应用列表权限时返回虚假已授权<br>" +
+        "• 部分应用可能需要重启或无效<br><br>" +
+        "是否立即刷新应用使设置生效？"
+      : "❌ <font color='#F44336'>权限伪造功能已关闭</font><br><br>" +
+        "功能效果：<br>" +
+        "• 读取应用列表权限时返回真实状态<br>" +
+        "• (比如当前应用没有“授权”,应用能检测到)<br><br>" +
+        "• 部分应用可能因此拒绝运行或无效<br>" +
+        "是否立即刷新应用使设置生效？";
+
 
               AlertDialog dialog = createBoundedDialog(
                 activity,
@@ -2388,7 +4220,7 @@ public class HookInit implements IXposedHookLoadPackage {
                           }
                           break;
                         case 2:
-                          showRefreshDialog(activity);
+                          showRefreshConfirmDialog(activity, null);
                           break;
                       }
                       dialog.dismiss();
@@ -2412,83 +4244,7 @@ public class HookInit implements IXposedHookLoadPackage {
     }
   }
 
-  // 拦截退出确认弹窗+动态按钮文字+强化状态提示
-  private void showInterceptExitConfirmDialog(
-    final Activity activity,
-    final TextView floatingView
-  ) {
-    try {
-      final boolean isCurrentlyBlocking = blockExitMap.getOrDefault(
-        currentTargetApp,
-        false
-      );
-      // 动态设置标题、按钮文字、文案
-      String title = isCurrentlyBlocking ? "关闭拦截退出" : "开启拦截退出";
-      String confirmBtnText = isCurrentlyBlocking ? "确认关闭" : "确认开启";
-      String message = isCurrentlyBlocking
-        ? "📌 当前状态：已开启拦截退出\n" +
-        "✅ 功能效果：应用因检测到伪造包退出时会被拦截\n" +
-        "静默选择：当应用没有新的检测包时，你选择相同功能2次后自动拦截\n" +
-        "(比如你选择了2次拦截功能，应用没有更新包名就会拦截退出)\n" +
-        "每当有更新时将作废,直到没有更新。部分应用退出拦截可能失效\n" +
-        "\n" +
-        "确定要关闭该功能吗？\n" +
-        "❌ 关闭后：应用可正常退出，不再拦截"
-        : "📌 当前状态：已关闭拦截退出\n" +
-        "❌ 功能效果：应用退出时不会被拦截\n" +
-        "静默选择：当应用没有新的检测包时，你选择相同功能2次后自动放行\n" +
-        "(比如你选择了2次不拦截功能，应用没有更新包名就会放行退出)\n" +
-        "每当有更新时将作废,直到没有更新。部分应用退出拦截可能失效\n" +
-        "\n" +
-        "确定要开启该功能吗？\n" +
-        "✅ 开启后：将阻止应用因检测到伪造包而退出";
 
-      AlertDialog confirmDialog = createBoundedDialog(
-        activity,
-        title,
-        message,
-        new String[] { confirmBtnText, "取消" },
-        new DialogInterface.OnClickListener[] {
-          new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-              // 原有切换逻辑不变
-              blockExitMap.put(currentTargetApp, !isCurrentlyBlocking);
-              saveConfigToFile();
-
-              // 悬浮窗文本更新
-              Boolean currentStatus = installStatusMap.get(currentTargetApp);
-              boolean status = currentStatus != null ? currentStatus : true;
-              String statusText = status ? "已安装" : "未安装";
-              String blockText = !isCurrentlyBlocking ? "[拦截]" : "";
-              floatingView.setText("伪造安装(" + statusText + ")" + blockText);
-
-              // Toast提示优化
-              String toastMsg = !isCurrentlyBlocking
-                ? "✅ 拦截退出功能已开启\n应用退出时将自动拦截"
-                : "❌ 拦截退出功能已关闭\n应用可正常退出";
-              Toast.makeText(activity, toastMsg, Toast.LENGTH_LONG).show();
-              dialog.dismiss();
-            }
-          },
-          new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-              dialog.dismiss();
-            }
-          },
-        }
-      );
-      confirmDialog.show();
-    } catch (Throwable t) {
-      log("显示拦截退出确认弹窗异常: " + t.getMessage());
-      Toast.makeText(
-        activity,
-        "❌ 操作失败，请重试",
-        Toast.LENGTH_SHORT
-      ).show();
-    }
-  }
 
   // ========== 点击菜单 ==========
   private void showClickMenu(
@@ -2620,30 +4376,30 @@ public class HookInit implements IXposedHookLoadPackage {
 
   // ========== 显示退出拦截刷新提示 ==========
   private void showBlockExitRefreshPrompt(
-    final Activity activity,
-    final boolean enabled
-  ) {
-    try {
-      String title = enabled ? "退出拦截已开启" : "退出拦截已关闭";
-      String message = enabled
-        ? "✅ 退出拦截功能已开启\n\n" +
-        "功能效果：\n" +
-        "• 应用因检测到伪造包而退出时会被拦截\n" +
-        "• 会弹出提示询问是否允许退出\n\n" +
-        "• 可设置静默拦截（不再询问）\n" +
-        "不再询问：当应用没有新的检测包时，你选择相同功能2次后自动拦截\n" +
-        "(比如你选择了2次拦截功能，应用没有更新包名就会拦截退出)\n" +
-        "每当有更新时将作废,直到没有更新。部分应用退出拦截可能失效\n\n" +
+  final Activity activity,
+  final boolean enabled
+) {
+  try {
+    String title = enabled ? "退出拦截已开启" : "退出拦截已关闭";
+    String message = enabled
+      ? "✅ <font color='#4CAF50'>退出拦截功能已开启</font><br><br>" +
+        "功能效果：<br>" +
+        "• 应用因检测到伪造包而退出时会被拦截<br>" +
+        "• 会弹出提示询问是否允许退出<br><br>" +
+        "• 可设置静默拦截（不再询问）<br>" +
+        "不再询问：当应用没有新的检测包时，你选择相同功能2次后自动拦截<br>" +
+        "(比如你选择了2次拦截功能，应用没有更新包名就会拦截退出)<br>" +
+        "每当有更新时将作废,直到没有更新。部分应用退出拦截可能失效<br><br>" +
         "是否立即刷新应用使设置生效？"
-        : "❌ 退出拦截功能已关闭\n\n" +
-        "功能效果：\n" +
-        "• 应用可正常退出\n" +
-        "• 本次不再拦截任何退出行为\n\n" +
-        "静默选择：当应用没有新的检测包时，你选择相同功能2次后自动放行\n" +
-        "(比如你选择了2次不拦截功能，应用没有更新包名就会放行退出)\n" +
-        "每当有更新时将作废,直到没有更新。部分应用退出拦截可能失效\n\n" +
+      : "❌ <font color='#F44336'>退出拦截功能已关闭</font><br><br>" +
+        "功能效果：<br>" +
+        "• 应用可正常退出<br>" +
+        "• 本次不再拦截任何退出行为<br><br>" +
+        "静默选择：当应用没有新的检测包时，你选择相同功能2次后自动放行<br>" +
+        "(比如你选择了2次不拦截功能，应用没有更新包名就会放行退出)<br>" +
+        "每当有更新时将作废,直到没有更新。部分应用退出拦截可能失效<br><br>" +
         "是否立即刷新应用使设置生效？";
-
+        
       AlertDialog dialog = createBoundedDialog(
         activity,
         title,
@@ -2671,152 +4427,161 @@ public class HookInit implements IXposedHookLoadPackage {
     }
   }
 
-  // ========== 隐藏对话框 ==========
-  private void showHideDialog(
+// ========== 隐藏对话框 ==========
+private void showHideDialog(
     final Activity activity,
     final View floatingView
-  ) {
+) {
     try {
-      // 创建局部final变量，供匿名内部类引用
-      final View finalFloatingView = floatingView;
-
-      // 创建弹窗对话框
-      AlertDialog dialog = createBoundedDialog(
-        activity,
-        "隐藏悬浮窗",
-        "确定要隐藏悬浮窗吗？\n可以在应用重启后重新显示\n\n" +
-        "【清理包列表】会清空所有捕获的应用包记录",
-        new String[] { "隐藏", "清理包列表", "取消" }, 
-        new DialogInterface.OnClickListener[] {
-          new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-              try {
-                ViewGroup parent = (ViewGroup) finalFloatingView.getParent();
-                if (parent != null) {
-                  parent.removeView(finalFloatingView);
-                }
-
-                floatingShownMap.put(currentTargetApp, false);
-                saveConfigToFile();
-
-                Toast.makeText(
-                  activity,
-                  "悬浮窗已隐藏\n重启后恢复",
-                  Toast.LENGTH_SHORT
-                ).show();
-              } catch (Throwable t) {
-                log("隐藏悬浮窗异常: " + t.getMessage());
-              }
+        String message = "【隐藏】隐藏本次应用内的悬浮窗显示功能<br>" +
+                        "<font color='#F44336'>隐藏后将在应用重启时恢复显示</font><br><br>" +
+                        "——————————————<br><br>" +
+                        "【清理包列表】" +
+                        "•清理自动捕获/添加的包名数据<br>" +
+                        "<font color='#F44336'>清理后将重新获取自动捕获的新数据</font>";
+        AlertDialog dialog = createBoundedDialog(
+            activity,
+            "悬浮窗设置",
+            message,  // 使用HTML格式的消息
+            new String[] { "隐藏", "清理包列表", "取消" },
+            new DialogInterface.OnClickListener[] {
+                new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        try {
+                            if (floatingView != null) {
+                                ViewGroup parent = (ViewGroup) floatingView.getParent();
+                                if (parent != null) {
+                                    parent.removeView(floatingView);
+                                }
+                            }
+                            floatingShownMap.put(currentTargetApp, false);
+                            currentFloatingView = null;
+                            stop定时置顶();
+                          //  saveConfigToFile();  // ⚠️ 保存后重启不恢复！
+                            
+                            // ========== 显示提示 ==========
+                            Toast.makeText(
+                                activity,
+                                "✅ 悬浮窗已隐藏\n重启应用后重新显示",
+                                Toast.LENGTH_LONG
+                            ).show();
+                        } catch (Throwable t) {
+                            log("❌ 隐藏悬浮窗异常: " + t.getMessage());
+                            Toast.makeText(activity, "隐藏失败", Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                },
+                new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                        List<String> userPackages = userDefinedPackagesMap.getOrDefault(
+                            currentTargetApp,
+                            new ArrayList<>()
+                        );
+                        if (userPackages.isEmpty()) {
+                            clearAllPackageLists(activity, floatingView);
+                        } else {
+                            showClearConfirmDialog(activity, floatingView);
+                        }
+                    }
+                },
+                new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();  // 取消
+                    }
+                },
             }
-          },
-          // 清理包列表按钮
-          new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-              try {
-                // 清理配置中的包列表
-                clearAllPackageLists(activity, finalFloatingView);
-                dialog.dismiss();
-              } catch (Throwable t) {
-                log("清理包列表异常: " + t.getMessage());
-                Toast.makeText(activity, "清理失败", Toast.LENGTH_SHORT).show();
-              }
-            }
-          },
-          new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-              dialog.dismiss();
-            }
-          },
-        }
-      );
-
-      dialog.show();
+        );
+        
+        dialog.show();
+        
     } catch (Throwable t) {
-      log("显示隐藏对话框异常: " + t.getMessage());
+        log("❌ 显示隐藏对话框异常: " + t.getMessage());
     }
-  }
+}
+
 
   // ========== 清理所有包列表 ==========
-  private void clearAllPackageLists(
-    final Activity activity,
-    final View floatingView
-  ) {
-    try {
-      // 1. 清空全局捕获包列表
-      synchronized (globalCapturedPackages) {
-        int globalCount = globalCapturedPackages.size();
-        globalCapturedPackages.clear();
-        //     log("✅ 已清空全局捕获包列表，清理了 " + globalCount + " 个包");
-      }
-
-      // 2. 清空当前应用的捕获包列表
-      int appCount = appCapturedPackages.size();
-      appCapturedPackages.clear();
-      //   log("✅ 已清空当前应用捕获包列表，清理了 " + appCount + " 个包");
-
-      // 3. 清空拦截模式中的包列表
-      List<InterceptPattern> patterns = interceptPatternsMap.get(
-        currentTargetApp
-      );
-      if (patterns != null) {
-        int patternCount = patterns.size();
-        for (InterceptPattern pattern : patterns) {
-          pattern.installedPackages.clear();
-          pattern.notInstalledPackages.clear();
-        }
-        //   log("✅ 已清空拦截模式中的包列表，清理了 " + patternCount + " 个模式");
-      }
-
-      // 4. 重置智能伪造缓存
-      clearSmartFakeCache();
-
-      // 5. 保存配置到文件
-      saveConfigToFile();
-
-      // 6. 显示清理成功的提示
-      activity.runOnUiThread(
-        new Runnable() {
-          @Override
-          public void run() {
-            try {
-              String message =
-                "✅ 清理完成\n" +
-                "• 已清空全局包列表\n" +
-                "• 已清空当前应用包列表\n" +
-                "• 已重置伪造缓存\n" +
-                "• 配置已保存";
-              Toast.makeText(activity, message, Toast.LENGTH_LONG).show();
-
-              // 可选：刷新悬浮窗显示
-              //showRefreshPrompt(activity, message);
-              //showRefreshDialog(activity);
-              if (floatingView != null) {
-               // updateFloatingView(activity);
-                showRefreshDialog(activity);
-              }
-            } catch (Throwable t) {
-              log("显示清理成功提示异常: " + t.getMessage());
-            }
-          }
-        }
-      );
-    } catch (Throwable t) {
-      log("清理包列表异常: " + t.getMessage());
-      activity.runOnUiThread(
-        new Runnable() {
-          @Override
-          public void run() {
-            // Toast.makeText(activity, "清理失败: " + t.getMessage(),
-            // Toast.LENGTH_SHORT).show();
-            Toast.makeText(activity, "清理失败", Toast.LENGTH_SHORT).show();
-          }
-        }
-      );
+// 清理所有包列表（自动捕获+手动添加+排除包）
+private void clearAllPackageLists(
+  final Activity activity,
+  final View floatingView
+) {
+  try {
+    // 1. 清空全局捕获包列表
+    synchronized (globalCapturedPackages) {
+      globalCapturedPackages.clear();
     }
+    // 2. 清空当前应用的捕获包列表
+    appCapturedPackages.clear();
+    // 3. 清空拦截模式中的包列表
+    List<InterceptPattern> patterns = interceptPatternsMap.get(
+      currentTargetApp
+    );
+    if (patterns != null) {
+      for (InterceptPattern pattern : patterns) {
+        pattern.installedPackages.clear();
+        pattern.notInstalledPackages.clear();
+      }
+    }
+    // 4. 清空用户手动添加的包列表（伪造包）
+    userDefinedPackagesMap.put(currentTargetApp, new ArrayList<>());
+    // 新增：5. 显式清空手动添加的排除包列表（关键修改）
+    excludedPackagesMap.put(currentTargetApp, new ArrayList<>());
+    // 6. 重置智能伪造缓存
+    clearSmartFakeCache();
+    // 7. 保存配置到文件（确保清空状态持久化）
+    saveConfigToFile();
+    // 8. 显示清理成功的提示
+    activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String message = "<b>✅ 清理完成</b><br>" +
+                                   "• 已清空全局包列表<br>" +
+                                   "• 已清空当前应用包列表<br>" +
+                                   "• 已清空用户自定义包名<br>" +
+                                   "• 已重置伪造缓存<br>" +
+                                   "• 配置已保存";
+                    
+                    Toast toast = Toast.makeText(activity, "", Toast.LENGTH_LONG);
+                    TextView tv = new TextView(activity);
+                    tv.setText(Html.fromHtml(message));
+                    tv.setGravity(Gravity.CENTER);
+                    tv.setPadding(40, 30, 40, 30);
+                    tv.setTextSize(16);
+                    tv.setTextColor(0xFF000000);
+                    tv.setBackgroundColor(0xAAFFFFFF);
+                    toast.setView(tv);
+                    toast.setGravity(Gravity.CENTER, 0, 400);
+                    toast.show();
+                    if (floatingView != null) {
+                        showRefreshConfirmDialog(activity, null); //显示弹窗
+                    }
+                } catch (Throwable t) {
+                    log("显示清理成功提示异常: " + t.getMessage());
+                    // 兜底Toast
+                    Toast.makeText(activity, "✅ 清理完成", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+  } catch (Throwable t) {
+    log("清理包列表异常: " + t.getMessage());
+    activity.runOnUiThread(
+      new Runnable() {
+        @Override
+        public void run() {
+          Toast.makeText(activity, "清理失败", Toast.LENGTH_SHORT).show();
+        }
+      }
+    );
   }
+}
+
+
 
   // ========== 清理智能伪造缓存的方法 ==========
   private void clearSmartFakeCache() {
@@ -2833,82 +4598,137 @@ public class HookInit implements IXposedHookLoadPackage {
     }
   }
 
-  // ========== 边界安全的对话框创建方法 ==========
-  private AlertDialog createBoundedDialog(
-    final Activity activity,
-    String title,
-    String message,
-    String[] buttonTexts,
-    DialogInterface.OnClickListener[] listeners
-  ) {
-    AlertDialog.Builder builder = new AlertDialog.Builder(
-      activity,
-      AlertDialog.THEME_DEVICE_DEFAULT_LIGHT
-    )
-      .setTitle(title)
-      .setMessage(message);
+// 边界安全的对话框创建方法（支持自定义视图+HTML消息颜色）
+private AlertDialog createBoundedDialog(
+  final Activity activity,
+  String title,
+  String message,
+  String[] buttonTexts,
+  DialogInterface.OnClickListener[] listeners
+) {
+  return createBoundedDialog(
+    activity,
+    title,
+    message,
+    buttonTexts,
+    listeners,
+    null
+  );
+}
 
-    // 按钮配置
-    if (buttonTexts.length >= 1 && listeners.length >= 1) {
-      builder.setPositiveButton(buttonTexts[0], listeners[0]);
+// 重载版本：支持自定义视图+HTML消息颜色
+private AlertDialog createBoundedDialog(
+  final Activity activity,
+  String title,
+  String message,
+  String[] buttonTexts,
+  DialogInterface.OnClickListener[] listeners,
+  final View customView
+) {
+  AlertDialog.Builder builder = new AlertDialog.Builder(
+    activity,
+    AlertDialog.THEME_DEVICE_DEFAULT_LIGHT
+  ).setTitle(title);
+  // 处理消息或自定义视图（支持HTML颜色）
+  if (customView != null) {
+    // 使用自定义视图
+    builder.setView(customView);
+  } else if (message != null && !message.isEmpty()) {
+    // 支持HTML格式消息（用于颜色显示）
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      builder.setMessage(Html.fromHtml(message, Html.FROM_HTML_MODE_LEGACY));
+    } else {
+      builder.setMessage(Html.fromHtml(message));
     }
-    if (buttonTexts.length >= 2 && listeners.length >= 2) {
-      builder.setNegativeButton(buttonTexts[1], listeners[1]);
-    }
-    if (buttonTexts.length >= 3 && listeners.length >= 3) {
-      builder.setNeutralButton(buttonTexts[2], listeners[2]);
-    }
-
-    final AlertDialog dialog = builder.create();
-
-    // 极简置顶配置
-    dialog.setOnShowListener(
-      new DialogInterface.OnShowListener() {
-        @Override
-        public void onShow(DialogInterface dialogInterface) {
-          try {
-            Window window = dialog.getWindow();
-            if (window != null) {
-              WindowManager.LayoutParams params = window.getAttributes();
-              // 基础层级提升
-              params.flags |= WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
-              params.flags |= WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON;
-
-              // 位置和大小
-              DisplayMetrics metrics = new DisplayMetrics();
-              activity
-                .getWindowManager()
-                .getDefaultDisplay()
-                .getMetrics(metrics);
+  }
+  // 按钮配置
+  if (buttonTexts.length >= 1 && listeners.length >= 1) {
+    builder.setPositiveButton(buttonTexts[0], listeners[0]);
+  }
+  if (buttonTexts.length >= 2 && listeners.length >= 2) {
+    builder.setNegativeButton(buttonTexts[1], listeners[1]);
+  }
+  if (buttonTexts.length >= 3 && listeners.length >= 3) {
+    builder.setNeutralButton(buttonTexts[2], listeners[2]);
+  }
+  final AlertDialog dialog = builder.create();
+  // 设置对话框显示时的属性
+  dialog.setOnShowListener(
+    new DialogInterface.OnShowListener() {
+      @Override
+      public void onShow(DialogInterface dialogInterface) {
+        try {
+          Window window = dialog.getWindow();
+          if (window != null) {
+            WindowManager.LayoutParams params = window.getAttributes();
+            // 基础层级提升
+            params.flags |= WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+            params.flags |= WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON;
+            // 位置和大小
+            final DisplayMetrics metrics = new DisplayMetrics();
+            activity
+              .getWindowManager()
+              .getDefaultDisplay()
+              .getMetrics(metrics);
+            // 根据是否有自定义视图调整大小
+            if (customView != null) {
+              // 自定义视图时使用包裹内容
+              params.width = WindowManager.LayoutParams.WRAP_CONTENT;
+              params.height = WindowManager.LayoutParams.WRAP_CONTENT;
+            } else {
+              // 文本消息时使用MATCH_PARENT
               params.width = WindowManager.LayoutParams.MATCH_PARENT;
               params.height = WindowManager.LayoutParams.WRAP_CONTENT;
-              params.gravity = Gravity.CENTER;
-              params.horizontalMargin = 0.25f; // 25%边距
-
-              // 4. 弱暗化
-              window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-              params.dimAmount = 0.6f; // 60%暗化，确保弹窗可见
-
-              // 5. 安全置顶
-              window.setAttributes(params);
-              window.getDecorView().bringToFront();
-              activity.getWindow().getDecorView().bringToFront();
             }
-          } catch (Throwable t) {
-            log("设置对话框异常: " + t.getMessage());
-            // 兜底：强制显示弹窗
-            dialog.show();
+            params.gravity = Gravity.CENTER;
+            params.horizontalMargin = 0.25f; // 25%边距
+            // 弱暗化
+            window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            params.dimAmount = 0.6f; // 60%暗化，确保弹窗可见
+            // 安全置顶
+            window.setAttributes(params);
+            window.getDecorView().bringToFront();
+            activity.getWindow().getDecorView().bringToFront();
+            // 对于自定义视图，可能需要额外处理
+            if (customView != null) {
+              // 设置最大高度（避免超出屏幕）
+              final View contentView = window.findViewById(
+                android.R.id.content
+              );
+              if (contentView != null) {
+                contentView.post(
+                  new Runnable() {
+                    @Override
+                    public void run() {
+                      int maxHeight = (metrics.heightPixels * 70) / 100; // 屏幕高度的70%
+                      if (contentView.getHeight() > maxHeight) {
+                        LinearLayout.LayoutParams lp =
+                          new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            maxHeight
+                          );
+                        contentView.setLayoutParams(lp);
+                      }
+                    }
+                  }
+                );
+              }
+            }
           }
+        } catch (Throwable t) {
+          log("设置对话框异常: " + t.getMessage());
+          // 兜底：强制显示弹窗
+          dialog.show();
         }
       }
-    );
+    }
+  );
+  // 允许外部点击关闭（但保留默认行为）
+  dialog.setCanceledOnTouchOutside(true);
+  dialog.setCancelable(true);
+  return dialog;
+}
 
-    // 允许外部点击关闭
-    dialog.setCanceledOnTouchOutside(true);
-    dialog.setCancelable(true);
-
-    return dialog;
-  }
 
   // ========== 状态切换处理方法 ==========
   private void handleStatusSwitch(
@@ -2951,15 +4771,15 @@ public class HookInit implements IXposedHookLoadPackage {
 
   // ========== 刷新功能 ==========
   private void showRefreshPrompt(
-    final Activity activity,
-    final String message
-  ) {
-    try {
-      AlertDialog dialog = createBoundedDialog(
-        activity,
-        "状态切换成功",
-        message + "\n\n是否立即刷新应用使状态生效？",
-        new String[] { "立即刷新", "稍后" },
+  final Activity activity,
+  final String message
+) {
+  try {
+    AlertDialog dialog = createBoundedDialog(
+      activity,
+      "状态切换成功",
+      message + "<br><br>是否立即刷新应用使状态生效？", // 新增空行
+      new String[] { "立即刷新", "稍后" },
         new DialogInterface.OnClickListener[] {
           new DialogInterface.OnClickListener() {
             @Override
@@ -2982,60 +4802,90 @@ public class HookInit implements IXposedHookLoadPackage {
     }
   }
 
-  private void showRefreshDialog(final Activity activity) {
+//刷新弹窗
+  private void showRefreshConfirmDialog(final Activity activity, final String customMessage) {
+    if (activity == null || activity.isFinishing()) return;
+    
     try {
-      AlertDialog dialog = createBoundedDialog(
-        activity,
-        "刷新应用",
-        "这将重新加载配置文件并更新显示，\n使状态切换立即生效。\n确定要刷新吗？",
-        new String[] { "确定刷新", "取消" },
-        new DialogInterface.OnClickListener[] {
-          new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-              refreshApplication(activity);
-            }
-          },
-          new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-              dialog.dismiss();
-            }
-          },
+        String message;
+        if (customMessage != null && !customMessage.isEmpty()) {
+            message = customMessage + "<br><br>是否立即刷新应用使配置生效？";
+        } else {
+            message = "这将重新加载配置文件并更新显示，<br>" +
+                     "使状态切换立即生效。<br><br>" +
+                     "确定要刷新吗？";
         }
-      );
-
-      dialog.show();
+        
+        AlertDialog dialog = createBoundedDialog(
+            activity,
+            "刷新应用",
+            message,
+            new String[]{"立即刷新", "取消"},
+            new DialogInterface.OnClickListener[]{
+                new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        refreshApplication(activity);
+                    }
+                },
+                new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                    }
+                }
+            }
+        );
+        
+        dialog.show();
+        
     } catch (Throwable t) {
-      log("显示刷新对话框异常: " + t.getMessage());
+        log("显示刷新对话框异常: " + t.getMessage());
     }
-  }
+}
 
   private void refreshApplication(final Activity activity) {
     try {
-      appCapturedPackages.clear();
+     // appCapturedPackages.clear();
       installStatusMap.remove(currentTargetApp);
       floatingShownMap.remove(currentTargetApp);
       loadConfigFromFile();
       updateFloatingView(activity);
 
-      activity.runOnUiThread(
-        new Runnable() {
-          @Override
-          public void run() {
-            Boolean currentStatus = installStatusMap.get(currentTargetApp);
-            String statusText = currentStatus != null
-              ? (currentStatus ? "已安装" : "未安装")
-              : "未知";
-
-            Toast.makeText(
-              activity,
-              "刷新完成\n当前状态: " + statusText,
-              Toast.LENGTH_SHORT
-            ).show();
-          }
-        }
-      );
+      activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Boolean currentStatus = installStatusMap.get(currentTargetApp);
+                    String statusText = "未知";
+                    if (currentStatus != null) {
+                        statusText = currentStatus ? "已安装" : "未安装";
+                    }
+                    String toastMessage = "✅ 刷新完成<br>当前状态: " + statusText;
+                    
+                    // 使用自定义Toast显示HTML
+                    Toast toast = Toast.makeText(activity, "", Toast.LENGTH_SHORT);
+                    TextView tv = new TextView(activity);
+                    tv.setText(Html.fromHtml(toastMessage));
+                    tv.setGravity(Gravity.CENTER);
+                    tv.setPadding(30, 20, 30, 20);
+                    tv.setTextSize(16);
+                    tv.setTextColor(0xFF000000);
+                    tv.setBackgroundColor(0xAAFFFFFF);
+                    toast.setView(tv);
+                    toast.setGravity(Gravity.CENTER, 0, 400);
+                    toast.show();
+                  //  log("刷新成功，当前状态: " + statusText);
+                } catch (Throwable e) {
+                    // 兜底方案
+                    Boolean currentStatus = installStatusMap.get(currentTargetApp);
+                    String statusText = currentStatus != null ? 
+                        (currentStatus ? "已安装" : "未安装") : "未知";
+                    Toast.makeText(activity, "刷新完成\n当前状态: " + statusText, 
+                        Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
     } catch (Throwable t) {
       log("刷新应用异常: " + t.getMessage());
       activity.runOnUiThread(
@@ -3936,7 +5786,7 @@ public class HookInit implements IXposedHookLoadPackage {
           protected void beforeHookedMethod(MethodHookParam param)
             throws Throwable {
             try {
-              boolean originalCancelable = (boolean) param.args[0];
+              boolean originalCancelable = param.args[0];
 
               // 获取当前Activity上下文
               Context context = null;
@@ -4289,10 +6139,12 @@ public class HookInit implements IXposedHookLoadPackage {
   // ========== 核心Hook方法 ==========
   private void hookKeyMethods(ClassLoader classLoader) {
     try {
-      hookGetPackageInfo(classLoader);
+    
+     hookGetPackageInfo(classLoader);
       hookGetApplicationInfo(classLoader);
       hookGetInstalledPackages(classLoader);
       hookGetInstalledApplications(classLoader);
+      
     } catch (Throwable t) {
       log("Hook关键方法失败: " + t);
     }
@@ -4496,7 +6348,7 @@ public class HookInit implements IXposedHookLoadPackage {
         break; // 浏览器/侧载
       default:
         installer = null;
-        //无来源
+      //无来源
     }
 
     installerCache.put(packageName, installer);
@@ -4850,6 +6702,7 @@ public class HookInit implements IXposedHookLoadPackage {
     }
   }
 
+/*
   private void hookGetPackageInfo(ClassLoader classLoader) {
     try {
       XposedHelpers.findAndHookMethod(
@@ -4864,6 +6717,14 @@ public class HookInit implements IXposedHookLoadPackage {
             throws Throwable {
             String packageName = (String) param.args[0];
             int flags = (int) param.args[1];
+            /*
+             if (packageName == null) return;
+                    // ========== 🟢 1. 唯一放行条件：自己查自己 ==========
+                    if (packageName.equals(currentTargetApp)) {
+                        return;
+                    }下面已有↓
+                    */
+                    /*
             if (packageName != null && !packageName.equals(currentTargetApp)) {
               // 系统包直接放行，走系统真实查询逻辑
               if (
@@ -4874,7 +6735,8 @@ public class HookInit implements IXposedHookLoadPackage {
                 log("✅ 跳过系统包查询: " + packageName);
                 return;
               }
-
+              
+              
               // Android 11+ PACKAGE_QUERY_FLAGS 权限伪造
               boolean isAndroid11Plus =
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.R;
@@ -4923,12 +6785,14 @@ public class HookInit implements IXposedHookLoadPackage {
 
               if (!shouldReturnInstalled) {
                 try {
+                
                   // 抛出系统原生异常
                   param.setThrowable(
                     new PackageManager.NameNotFoundException(
                       "Package " + packageName + " not found"
                     )
                   );
+                  
                 } catch (Throwable e) {
                   // 兜底：返回无有效信息的空实例
                   PackageInfo emptyPkg = new PackageInfo();
@@ -4945,7 +6809,7 @@ public class HookInit implements IXposedHookLoadPackage {
                 }
                 return;
               }
-
+              
               // 已安装：启用智能伪造
               synchronized (globalCapturedPackages) {
                 if (!globalCapturedPackages.contains(packageName)) {
@@ -4953,11 +6817,15 @@ public class HookInit implements IXposedHookLoadPackage {
                   saveConfigToFile();
                 }
               }
+              
               if (!appCapturedPackages.contains(packageName)) {
                 appCapturedPackages.add(packageName);
               }
               log(
-                "全局捕获列表(" + globalCapturedPackages.size() + "): " + globalCapturedPackages.toString()
+                "全局捕获列表(" +
+                globalCapturedPackages.size() +
+                "): " +
+                globalCapturedPackages.toString()
               );
               Object fakeResult = createSmartFakePackageInfo(
                 packageName,
@@ -4967,11 +6835,12 @@ public class HookInit implements IXposedHookLoadPackage {
                 param.setResult(fakeResult);
                 log("【已安装】智能伪造成功: " + packageName);
                 if (!blockExitMap.getOrDefault(currentTargetApp, false)) {
-                  blockExitMap.put(currentTargetApp, true);
-                  log("⚠️ 检测到伪造包，自动开启拦截退出");
+                 // blockExitMap.put(currentTargetApp, true); //可选自动开启拦截退出
+                //  log("⚠️ 检测到伪造包，自动开启拦截退出");
                 }
               }
             }
+            
           }
         }
       );
@@ -4979,6 +6848,96 @@ public class HookInit implements IXposedHookLoadPackage {
       log("Hook getPackageInfo失败: " + t.getMessage());
     }
   }
+*/
+
+private void hookGetPackageInfo(ClassLoader classLoader) {
+    try {
+        XposedHelpers.findAndHookMethod(
+            "android.app.ApplicationPackageManager",
+            classLoader,
+            "getPackageInfo",
+            String.class,
+            int.class,
+            new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param)
+                    throws Throwable {
+                    String packageName = (String) param.args[0];
+                    int flags = (int) param.args[1];
+                    
+                    if (packageName == null) return;
+                    
+                    // ========== 1. 自己查自己，直接放行 ==========
+                    if (packageName.equals(currentTargetApp)) {
+                        return;
+                    }
+                    
+                    // ========== 2. 系统包直接放行 ==========
+                    if (isSystemCorePackage(packageName)) {
+                        return;
+                    }
+                    
+                    // ========== 3. 🟢 核心修复：无条件捕获包名（同步保存） ==========
+                    boolean isNewCapture = false;
+                    synchronized (globalCapturedPackages) {
+                        if (!globalCapturedPackages.contains(packageName)) {
+                            globalCapturedPackages.add(packageName);
+                            isNewCapture = true;
+                            // ✅ 直接同步保存，最稳定！
+                            saveConfigToFile();
+                        }
+                    }
+                    if (!appCapturedPackages.contains(packageName)) {
+                        appCapturedPackages.add(packageName);
+                    }
+                    
+                    if (isNewCapture) {
+                      //  log("【包名捕获】" + packageName + " (当前状态: " + (installStatusMap.getOrDefault(currentTargetApp, true) ? "已安装" : "未安装") + ")");
+                    }
+                    
+                    // ========== 4. 根据安装状态处理返回值 ==========
+                    Boolean status = installStatusMap.get(currentTargetApp);
+                    boolean shouldReturnInstalled = status != null ? status : true;
+                    
+                    if (!shouldReturnInstalled) {
+                        // 🟢 未安装状态：返回包不存在（但包名已捕获并保存）
+                        try {
+                            param.setThrowable(
+                                new PackageManager.NameNotFoundException(
+                                    "Package " + packageName + " not found"
+                                )
+                            );
+                        } catch (Throwable e) {
+                            PackageInfo emptyPkg = new PackageInfo();
+                            emptyPkg.packageName = packageName;
+                            emptyPkg.versionName = null;
+                            emptyPkg.versionCode = -1;
+                            emptyPkg.applicationInfo = null;
+                            emptyPkg.firstInstallTime = 0;
+                            emptyPkg.lastUpdateTime = 0;
+                            param.setResult(emptyPkg);
+                        }
+                        return;
+                    }
+                    log("全局捕获列表(" + globalCapturedPackages.size() +"): " + globalCapturedPackages.toString());
+                    // ========== 5. 已安装状态：返回伪造信息 ==========
+                    Object fakeResult = createSmartFakePackageInfo(packageName, flags);
+                    if (fakeResult != null) {
+                        param.setResult(fakeResult);
+                        log("【已安装】智能伪造: " + packageName);
+                        if (!blockExitMap.getOrDefault(currentTargetApp, false)) {
+                      // blockExitMap.put(currentTargetApp, true); //可选自动开启拦截退出
+                       //  log("⚠️ 检测到伪造包，自动开启拦截退出");
+                       }
+                    }
+                }
+            }
+        );
+       // log("✅ Hook getPackageInfo成功（同步保存版）");
+    } catch (Throwable t) {
+        log("❌ Hook getPackageInfo失败: " + t.getMessage());
+    }
+}
 
   // 创建空安全PackageInfo（用于Android 11+权限伪造）
   private PackageInfo createEmptyPackageInfo(String packageName) {
@@ -4991,81 +6950,108 @@ public class HookInit implements IXposedHookLoadPackage {
     return emptyPkg;
   }
 
-  // 过滤系统核心包+厂商核心包
-  private boolean isSystemCorePackage(String packageName) {
-    // 先处理精确匹配的核心包（android、root、system）
-    if (
-      packageName.equals("android") ||
-      packageName.equals("root") ||
-      packageName.equals("system")
-    ) {
-      return true;
-    }
 
-    // 系统核心包 + 主流厂商核心包 + 厂商/子品牌
-    boolean isSystemOrManufacturer =
-      packageName.startsWith("com.android.") ||
-      packageName.startsWith("com.google.android.") ||
-      packageName.startsWith("android.") ||
-      packageName.equals("com.google.android.webview") ||
-      packageName.equals("com.google.android.gms") ||
-      packageName.equals("com.heytap.openid") ||
-      packageName.equals("com.google.android.packageinstaller") ||
-      // 核心厂商
-      packageName.startsWith("com.qualcomm") ||
-      packageName.startsWith("com.samsung") ||
-      packageName.startsWith("com.huawei") ||
-      packageName.startsWith("com.miui") ||
-      packageName.startsWith("com.oneplus") ||
-      packageName.startsWith("com.oppo") ||
-      packageName.startsWith("com.vivo") ||
-      packageName.startsWith("com.realme") ||
-      packageName.startsWith("com.xiaomi") ||
-      packageName.startsWith("com.meizu") ||
-      // 厂商/子品牌生态
-      packageName.startsWith("com.asus") || // 华硕
-      packageName.startsWith("com.lenovo") || // 联想
-      packageName.startsWith("com.zuk") || // zuk（联想子品牌）
-      packageName.startsWith("com.motorola") || // 摩托罗拉
-      packageName.startsWith("com.nokia") || // 诺基亚
-      packageName.startsWith("com.honor") || // 荣耀（原华为子品牌，现已独立）
-      packageName.startsWith("com.xiaomi.global") || // 小米国际版
-      packageName.startsWith("com.oppo.global") || // OPPO国际版
-      packageName.startsWith("com.vivo.global") || // VIVO国际版
-      packageName.startsWith("com.realme.global") || // realme国际版
-      packageName.startsWith("com.infinix") || // 传音Infinix
-      packageName.startsWith("com.tecno") || // 传音Tecno
-      packageName.startsWith("com.itel") || // 传音Itel
-      packageName.startsWith("com.sharp") || // 夏普
-      packageName.startsWith("com.sony") || // 索尼
-      packageName.startsWith("com.lg") || // LG
-      packageName.startsWith("com.poco") || // 小米POCO（子品牌）
-      packageName.startsWith("com.redmi") || // 小米Redmi（子品牌）
-      packageName.startsWith("com.huawei.hwid") || // 华为账号核心包
-      packageName.startsWith("com.oppo.nearme") || // OPPO应用商店核心包
-      packageName.startsWith("com.vivo.browser") || // VIVO浏览器核心包
-      packageName.startsWith("com.heytap") || // 一加/OPPO 欢太生态
-      packageName.startsWith("com.coloros") || // OPPO ColorOS核心
-      packageName.startsWith("com.flyme") || // 魅族Flyme核心
-      packageName.startsWith("com.mi") || // 小米生态核心（部分包前缀）
-      packageName.startsWith("com.xiaomi.account"); // 小米账号核心
 
-    // 核心库相关包
-    boolean isCoreLibRelated =
-      packageName.contains("webview") ||
-      packageName.contains("jiagu") ||
-      packageName.contains("c++_shared") ||
-      packageName.contains("breakpad") ||
-      packageName.contains("monochrome") ||
-      packageName.contains("vendor") || // 厂商底层库
-      packageName.contains("chipset") || // 芯片相关库
-      packageName.contains("modem") || // 调制解调器相关
-      packageName.contains("radio") || // 射频相关
-      packageName.contains("firmware"); // 固件相关
-
-    return isSystemOrManufacturer || isCoreLibRelated;
+ // 过滤系统核心包+厂商核心包+用户排除包
+private boolean isSystemCorePackage(String packageName) {
+  // 先处理精确匹配的核心包（android、root、system）
+  if (
+    packageName.equals("android") ||
+    packageName.equals("root") ||
+    packageName.equals("system")
+  ) {
+    return true;
   }
+  // 系统核心包 + 主流厂商核心包 + 厂商/子品牌
+  boolean isSystemOrManufacturer =
+    packageName.startsWith("com.android.") ||
+    packageName.startsWith("com.google.android.") ||
+    packageName.startsWith("android.") ||
+    packageName.equals("com.google.android.webview") ||
+    packageName.equals("com.google.android.gms") ||
+    packageName.equals("com.heytap.openid") ||
+    packageName.equals("com.google.android.packageinstaller") ||
+    // 核心厂商
+    packageName.startsWith("com.qualcomm") ||
+    packageName.startsWith("com.samsung") ||
+    packageName.startsWith("com.huawei") ||
+    packageName.startsWith("com.miui") ||
+    packageName.startsWith("com.oneplus") ||
+    packageName.startsWith("com.oppo") ||
+    packageName.startsWith("com.vivo") ||
+    packageName.startsWith("com.realme") ||
+    packageName.startsWith("com.xiaomi") ||
+    packageName.startsWith("com.meizu") ||
+    // 厂商/子品牌生态
+    packageName.startsWith("com.asus") || // 华硕
+    packageName.startsWith("com.lenovo") || // 联想
+    packageName.startsWith("com.zuk") || // zuk（联想子品牌）
+    packageName.startsWith("com.motorola") || // 摩托罗拉
+    packageName.startsWith("com.nokia") || // 诺基亚
+    packageName.startsWith("com.honor") || // 荣耀（原华为子品牌，现已独立）
+    packageName.startsWith("com.xiaomi.global") || // 小米国际版
+    packageName.startsWith("com.oppo.global") || // OPPO国际版
+    packageName.startsWith("com.vivo.global") || // VIVO国际版
+    packageName.startsWith("com.realme.global") || // realme国际版
+    packageName.startsWith("com.infinix") || // 传音Infinix
+    packageName.startsWith("com.tecno") || // 传音Tecno
+    packageName.startsWith("com.itel") || // 传音Itel
+    packageName.startsWith("com.sharp") || // 夏普
+    packageName.startsWith("com.sony") || // 索尼
+    packageName.startsWith("com.lg") || // LG
+    packageName.startsWith("com.poco") || // 小米POCO（子品牌）
+    packageName.startsWith("com.redmi") || // 小米Redmi（子品牌）
+    packageName.startsWith("com.huawei.hwid") || // 华为账号核心包
+    packageName.startsWith("com.oppo.nearme") || // OPPO应用商店核心包
+    packageName.startsWith("com.vivo.browser") || // VIVO浏览器核心包
+    packageName.startsWith("com.heytap") || // 一加/OPPO 欢太生态
+    packageName.startsWith("com.coloros") || // OPPO ColorOS核心
+    packageName.startsWith("com.flyme") || // 魅族Flyme核心
+    packageName.startsWith("com.mi") || // 小米生态核心（部分包前缀）
+    packageName.startsWith("com.xiaomi.account"); // 小米账号核心
+  // 核心库相关包
+  boolean isCoreLibRelated =
+    packageName.contains("webview") ||
+    packageName.contains("jiagu") ||
+    packageName.contains("c++_shared") ||
+    packageName.contains("breakpad") ||
+    packageName.contains("monochrome") ||
+    packageName.contains("vendor") || // 厂商底层库
+    packageName.contains("chipset") || // 芯片相关库
+    packageName.contains("modem") || // 调制解调器相关
+    packageName.contains("radio") || // 射频相关
+    packageName.contains("firmware"); // 固件相关
+  /*
+  List<String> excludedPackages = excludedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+  if (excludedPackages.contains(packageName)) {
+    return true; 
+  }
+*/
+  // 新增：检查是否为用户手动排除的包名
+List<String> excludedPackages = excludedPackagesMap.getOrDefault(currentTargetApp, new ArrayList<>());
+if (excludedPackages.contains(packageName) || 
+    (packageName != null && (
+        packageName.startsWith("io.va.exposed") ||          // VAExposed
+        packageName.startsWith("com.excean.dualaid") ||      // 微双开分身
+        packageName.startsWith("com.qihoo.magic") ||         // 分身大师(360)
+        packageName.startsWith("info.red.virtual") ||        // 悟空分身
+        packageName.startsWith("com.bly.dkplat") ||          // 小X分身
+        packageName.startsWith("com.pengyou.cloneapp") ||   // 小X分身国际版/Clone App
+        packageName.startsWith("com.jy.x.separation.manager") || // 团团分身
+        packageName.startsWith("com.dong.multirun") ||       // Multi Run
+        packageName.startsWith("com.excelliance.dualaid") || // 双开助手
+        packageName.startsWith("com.lbe.parallel") ||        // 平行空间
+        packageName.startsWith("com.parallel.space") ||      // 平行空间国际版
+        packageName.startsWith("com.chaozhijian.multiopen")  // 多开分身
+    ))) {
+    return true; // 纳入排除范围，跳过所有伪造/Hook
+}
 
+
+  return isSystemOrManufacturer || isCoreLibRelated;
+}
+
+/*
   private void hookGetApplicationInfo(ClassLoader classLoader) {
     try {
       XposedHelpers.findAndHookMethod(
@@ -5080,6 +7066,14 @@ public class HookInit implements IXposedHookLoadPackage {
             throws Throwable {
             String packageName = (String) param.args[0];
             int flags = (int) param.args[1];
+            /*
+             if (packageName == null) return;
+                    // ========== 🟢 1. 唯一放行条件：自己查自己 ==========
+                    if (packageName.equals(currentTargetApp)) {
+                        return;
+                    }下面已有↓
+                    */
+                    /*
             if (packageName != null && !packageName.equals(currentTargetApp)) {
               // 系统包直接放行，返回真实系统应用信息
               if (
@@ -5087,7 +7081,7 @@ public class HookInit implements IXposedHookLoadPackage {
                 packageName.contains("webview") ||
                 packageName.contains("chromium")
               ) {
-                log("✅ 放行系统包信息查询: " + packageName);
+              //  log("✅ 放行系统包信息查询: " + packageName);
                 return;
               }
               Boolean status = installStatusMap.get(currentTargetApp);
@@ -5163,6 +7157,100 @@ public class HookInit implements IXposedHookLoadPackage {
       log("Hook getApplicationInfo失败: " + t.getMessage());
     }
   }
+*/
+
+private void hookGetApplicationInfo(ClassLoader classLoader) {
+    try {
+        XposedHelpers.findAndHookMethod(
+            "android.app.ApplicationPackageManager",
+            classLoader,
+            "getApplicationInfo",
+            String.class,
+            int.class,
+            new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param)
+                    throws Throwable {
+                    String packageName = (String) param.args[0];
+                    int flags = (int) param.args[1];
+                    
+                    if (packageName == null) return;
+                    
+                    // ========== 1. 自己查自己，直接放行 ==========
+                    if (packageName.equals(currentTargetApp)) {
+                        return;
+                    }
+                    
+                    // ========== 2. 系统包直接放行 ==========
+                    if (isSystemCorePackage(packageName)) {
+                        return;
+                    }
+                    
+                    // ========== 3. 🟢 核心修复：无条件捕获包名（同步保存） ==========
+                    boolean isNewCapture = false;
+                    synchronized (globalCapturedPackages) {
+                        if (!globalCapturedPackages.contains(packageName)) {
+                            globalCapturedPackages.add(packageName);
+                            isNewCapture = true;
+                            // ✅ 直接同步保存，最稳定！
+                            saveConfigToFile();
+                        }
+                    }
+                    if (!appCapturedPackages.contains(packageName)) {
+                        appCapturedPackages.add(packageName);
+                    }
+                    
+                    if (isNewCapture) {
+                      //  log("【应用信息捕获】" + packageName + " (当前状态: " +   (installStatusMap.getOrDefault(currentTargetApp, true) ? "已安装" : "未安装") + ")");
+                    }
+                    
+                    // ========== 4. 根据安装状态处理返回值 ==========
+                    Boolean status = installStatusMap.get(currentTargetApp);
+                    boolean shouldReturnInstalled = status != null ? status : true;
+                    
+                    if (!shouldReturnInstalled) {
+                        // 🟢 未安装状态：返回包不存在
+                        try {
+                            param.setThrowable(
+                                new PackageManager.NameNotFoundException(
+                                    "Package " + packageName + " not found"
+                                )
+                            );
+                            log(
+                    "【未安装】返回未安装: " + packageName +"(关闭智能伪造)"
+                  );
+                        } catch (Throwable e) {
+                            ApplicationInfo emptyAppInfo = new ApplicationInfo();
+                            emptyAppInfo.packageName = packageName;
+                            emptyAppInfo.name = null;
+                            emptyAppInfo.flags = 0;
+                            emptyAppInfo.enabled = false;
+                            emptyAppInfo.sourceDir = null;
+                            emptyAppInfo.dataDir = null;
+                            emptyAppInfo.nativeLibraryDir = null;
+                            emptyAppInfo.uid = -1;
+                            emptyAppInfo.targetSdkVersion = -1;
+                            param.setResult(emptyAppInfo);
+                        }
+                        return;
+                    }
+                  // log("全局捕获列表(" + globalCapturedPackages.size() +"): " + globalCapturedPackages.toString());
+                    // ========== 5. 已安装状态：返回伪造信息 ==========
+                    Object fakeResult = createSmartApplicationInfo(packageName, flags);
+                    if (fakeResult != null) {
+                        param.setResult(fakeResult);
+                       // log("【已安装状态】智能伪造应用信息: " + packageName);
+                    } else {
+                        param.setResult(createFakeApplicationInfo(packageName));
+                    }
+                }
+            }
+        );
+      //  log("✅ Hook getApplicationInfo成功（同步保存版）");
+    } catch (Throwable t) {
+        log("❌ Hook getApplicationInfo失败: " + t.getMessage());
+    }
+}
 
   private void hookGetInstalledPackages(ClassLoader classLoader) {
     try {
@@ -5334,129 +7422,226 @@ public class HookInit implements IXposedHookLoadPackage {
   }
 
   private boolean isValidPackageName(String str) {
-    if (str == null || str.length() < 4 || !str.contains(".")) {
+    if (str == null || str.length() < 3 || !str.contains(".")) {
       return false;
     }
     return !str.startsWith("/") && !str.contains("://");
   }
 
-  // 全局Hook Bundle.getString，处理空Bundle场景
-  private void hookBundleGetString(ClassLoader classLoader) {
+//Hook Bundle.getString
+private void hookBundleGetString(ClassLoader classLoader) {
     try {
-      // 适配所有getString重载方法
-      XposedBridge.hookAllMethods(
-        Class.forName("android.os.Bundle", false, classLoader),
-        "getString",
-        new XC_MethodHook() {
-          @Override
-          protected void beforeHookedMethod(MethodHookParam param)
-            throws Throwable {
-            Bundle bundle = (Bundle) param.thisObject;
-            if (bundle == null) {
-              // 根据参数数量返回默认值
-              if (param.args.length >= 2) {
-                String defaultValue = (String) param.args[1];
-                param.setResult(defaultValue != null ? defaultValue : "");
-              } else {
-                param.setResult("");
-              }
-              //        log("⚠️  拦截空Bundle调用getString，返回默认值");
-              return;
-            }
-            if (param.args.length >= 1) {
-              String key = (String) param.args[0];
-              if (!bundle.containsKey(key)) {
-                if (param.args.length >= 2) {
-                  String defaultValue = (String) param.args[1];
-                  param.setResult(defaultValue != null ? defaultValue : "");
-                } else {
-                  param.setResult("");
+        Class<?> bundleClass = Class.forName("android.os.Bundle", false, classLoader);
+        
+        XposedBridge.hookAllMethods(
+            bundleClass,
+            "getString",
+            new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    // ========== 🚨【核心修复1】thisObject为空 ==========
+                    if (param.thisObject == null) {
+                        // 返回默认值
+                        if (param.args.length >= 2) {
+                            param.setResult(param.args[1]);
+                        } else {
+                            param.setResult("");
+                        }
+                        return;
+                    }
+                    
+                    Bundle bundle = (Bundle) param.thisObject;
+                    
+                    // ========== 🚨【核心修复2】Bundle已被GC或非法状态 ==========
+                    try {
+                        // 唯一安全的检测：hashCode() 会抛异常如果对象已销毁
+                        int hash = bundle.hashCode();
+                    } catch (Throwable e) {
+                        // Bundle已不可用，返回默认值
+                        if (param.args.length >= 2) {
+                            param.setResult(param.args[1]);
+                        } else {
+                            param.setResult("");
+                        }
+                        return;
+                    }
+                    
+                    // ========== 🚨【核心修复3】key不存在 ==========
+                    if (param.args.length >= 1) {
+                        String key = (String) param.args[0];
+                        if (!bundle.containsKey(key)) {
+                            if (param.args.length >= 2) {
+                                param.setResult(param.args[1]);
+                            } else {
+                                param.setResult("");
+                            }
+                            return;
+                        }
+                    }
                 }
-                //       log("⚠️  Bundle无key=" + key + "，补全默认空字符串");
-              }
+                
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    // ========== 🚨【核心修复4】返回值为空 ==========
+                    if (param.getResult() == null) {
+                        if (param.args.length >= 2) {
+                            param.setResult(param.args[1]);
+                        } else {
+                            param.setResult("");
+                        }
+                    }
+                }
             }
-          }
-        }
-      );
-      //  log("✅ 成功Hook Bundle.getString，空值兜底生效");
+        );
+        
+        // ========== 🚨【核心修复5】额外修复 getString(String key, String defaultValue) ==========
+        try {
+            XposedHelpers.findAndHookMethod(
+                bundleClass,
+                "getString",
+                String.class,
+                String.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (param.thisObject == null) {
+                            param.setResult(param.args[1]); // 返回默认值
+                            return;
+                        }
+                        
+                        Bundle bundle = (Bundle) param.thisObject;
+                        try {
+                            bundle.hashCode(); // 检测是否可用
+                        } catch (Throwable e) {
+                            param.setResult(param.args[1]);
+                            return;
+                        }
+                        
+                        String key = (String) param.args[0];
+                        if (!bundle.containsKey(key)) {
+                            param.setResult(param.args[1]);
+                        }
+                    }
+                }
+            );
+        } catch (Throwable ignored) {}
+        
+        //XposedBridge.log("[InstallHook] ✅ Bundle.getString Hook完成（空指针防护）");
+        
     } catch (Throwable t) {
-      log("⚠️  Hook Bundle.getString失败: " + t.getMessage());
+        //XposedBridge.log("[InstallHook] ❌ Hook Bundle.getString失败: " + t.getMessage());
     }
-  }
+}
 
   // 底层Hook Bundle类，拦截所有空实例的方法调用
   private void hookBundleEmptyInstance(ClassLoader classLoader) {
     try {
-      XposedHelpers.findAndHookConstructor(
-        "android.os.Bundle",
-        classLoader,
-        new XC_MethodHook() {
-          @Override
-          protected void afterHookedMethod(MethodHookParam param)
-            throws Throwable {
-            Bundle bundle = (Bundle) param.getResult();
-            if (bundle != null) {
-              bundle.putBoolean("_hooked_non_null_flag", true);
-            }
-          }
-        }
-      );
-      Class<?> bundleClass = Class.forName(
-        "android.os.Bundle",
-        false,
-        classLoader
-      );
-      // 仅Hook常用方法，避免遍历所有方法导致参数类型错误
-      String[] targetMethods = {
-        "getString",
-        "getInt",
-        "getBoolean",
-        "getBundle",
-        "containsKey",
-      };
-      for (String methodName : targetMethods) {
-        try {
-          // 适配不同参数重载（优先Hook无默认值版本）
-          XposedHelpers.findAndHookMethod(
+        Class<?> bundleClass = Class.forName("android.os.Bundle", false, classLoader);
+        
+        // Hook构造函数
+        XposedHelpers.findAndHookConstructor(
             bundleClass,
-            methodName,
-            String.class,
             new XC_MethodHook() {
-              @Override
-              protected void beforeHookedMethod(MethodHookParam param)
-                throws Throwable {
-                Bundle bundle = (Bundle) param.thisObject;
-                if (bundle == null) {
-                  // 先强制转换为Method，再获取返回类型
-                  if (param.method instanceof Method) {
-                    Method method = (Method) param.method;
-                    Class<?> returnType = method.getReturnType();
-                    if (returnType == String.class) {
-                      param.setResult("");
-                    } else if (returnType == int.class) {
-                      param.setResult(0);
-                    } else if (returnType == boolean.class) {
-                      param.setResult(false);
-                    } else {
-                      param.setResult(null);
-                    }
-                  } else {
-                    // 非Method类型（如Constructor），直接返回null
-                    param.setResult(null);
-                  }
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    // 构造出来的Bundle不可能为null，但防止反射异常
+                    if (param.getResult() == null) return;
+                    
+                    Bundle bundle = (Bundle) param.getResult();
+                    try {
+                        // 加个标记字段，但不依赖它
+                        bundle.putBoolean("__hook_protected", true);
+                    } catch (Throwable ignored) {}
                 }
-              }
             }
-          );
-        } catch (Throwable t) {
-          // 忽略无对应重载的情况
+        );
+        
+        // Hook所有可能崩溃的方法
+        String[] methods = {"getString", "getInt", "getBoolean", "getLong", 
+                           "getDouble", "getFloat", "getBundle", "getSerializable",
+                           "getParcelable", "getParcelableArrayList", "getStringArrayList",
+                           "getIntegerArrayList", "getBooleanArray", "containsKey"};
+        
+        for (String methodName : methods) {
+            try {
+                // 先Hook单参数版本
+                XposedHelpers.findAndHookMethod(
+                    bundleClass,
+                    methodName,
+                    String.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                            // ========== 🚨 统一空指针保护 ==========
+                            if (param.thisObject == null) {
+                                setDefaultReturnValue(param);
+                                return;
+                            }
+                            
+                            // 检测Bundle是否可用
+                            Bundle bundle = (Bundle) param.thisObject;
+                            try {
+                                bundle.hashCode();
+                            } catch (Throwable e) {
+                                setDefaultReturnValue(param);
+                            }
+                        }
+                        
+                        private void setDefaultReturnValue(MethodHookParam param) {
+                            if (param.method instanceof Method) {
+                                Class<?> returnType = ((Method) param.method).getReturnType();
+                                if (returnType == String.class) param.setResult("");
+                                else if (returnType == int.class) param.setResult(0);
+                                else if (returnType == long.class) param.setResult(0L);
+                                else if (returnType == boolean.class) param.setResult(false);
+                                else if (returnType == double.class) param.setResult(0.0);
+                                else if (returnType == float.class) param.setResult(0.0f);
+                                else param.setResult(null);
+                            }
+                        }
+                    }
+                );
+            } catch (Throwable ignored) {}
+            
+            try {
+                // Hook双参数版本（带默认值）
+                XposedHelpers.findAndHookMethod(
+                    bundleClass,
+                    methodName,
+                    String.class,
+                    Object.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                            if (param.thisObject == null) {
+                                param.setResult(param.args[1]); // 返回默认值
+                                return;
+                            }
+                            
+                            Bundle bundle = (Bundle) param.thisObject;
+                            try {
+                                bundle.hashCode();
+                            } catch (Throwable e) {
+                                param.setResult(param.args[1]);
+                                return;
+                            }
+                            
+                            String key = (String) param.args[0];
+                            if (!bundle.containsKey(key)) {
+                                param.setResult(param.args[1]);
+                            }
+                        }
+                    }
+                );
+            } catch (Throwable ignored) {}
         }
-      }
-      //   log("✅ 成功Hook Bundle常用方法，空实例拦截生效");
+        
+        //XposedBridge.log("[InstallHook] ✅ Bundle空实例防护完成");
+        
     } catch (Throwable t) {
-      log("Hook Bundle失败: " + t.getMessage());
+        //XposedBridge.log("[InstallHook] ❌ Hook Bundle失败: " + t.getMessage());
     }
-  }
+}
 
   // ========== 重载方法Hook ==========
   private void hookOverloadMethods(ClassLoader classLoader) {
@@ -5632,53 +7817,98 @@ public class HookInit implements IXposedHookLoadPackage {
       //    log("Hook文件读取失败: " + t.getMessage());
     }
   }
+  
+  
+// 让分身里的应用能正确加载 .so 文件（兜底方案）
+private void hookSoPathInApp(ClassLoader classLoader) {
+    try {
+        XposedHelpers.findAndHookMethod(
+            "android.app.Application",
+            classLoader,
+            "attach",
+            Context.class,
+            new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        Context context = (Context) param.args[0];
+                        ApplicationInfo ai = context.getApplicationInfo();
+                        // 已经修复过的就不重复log了
+                        XposedHelpers.setObjectField(ai, "nativeLibraryDir", ai.nativeLibraryDir);
+                    } catch (Throwable ignored) {}
+                }
+            }
+        );
+    } catch (Throwable ignored) {}
+}
+
+
+
 
   private void hookPackageManagerReflect() {
     try {
-      XposedHelpers.findAndHookMethod(
-        "java.lang.Class",
-        null,
-        "getMethod",
-        String.class,
-        Class[].class,
-        new XC_MethodHook() {
-          @Override
-          protected void beforeHookedMethod(MethodHookParam param)
-            throws Throwable {
-            if (!(param.thisObject instanceof Class)) {
-              return;
-            }
-            Class<?> targetClass = (Class<?>) param.thisObject;
-            String methodName = (String) param.args[0];
+        XposedHelpers.findAndHookMethod(
+            "java.lang.Class",
+            null,
+            "getMethod",
+            String.class,
+            Class[].class,
+            new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    try {
+                        if (!(param.thisObject instanceof Class)) {
+                            return;
+                        }
 
-            if (
-              targetClass
-                .getName()
-                .equals("android.app.ApplicationPackageManager") ||
-              targetClass
-                .getName()
-                .equals("android.content.pm.PackageManager") ||
-              targetClass.getName().contains("PackageManager")
-            ) {
-              if (
-                methodName.contains("getPackageInfoAsUser") ||
-                methodName.contains("getApplicationInfoAsUser") ||
-                methodName.contains("getInstalledPackagesAsUser") ||
-                methodName.contains("getInstalledApplicationsAsUser") ||
-                methodName.contains("hidden") ||
-                methodName.contains("internal") ||
-                methodName.contains("AsUser")
-              ) {
-                param.setResult(null);
-              }
+                        Class<?> targetClass = (Class<?>) param.thisObject;
+                        String methodName = (String) param.args[0];
+
+                        // 仅过滤 PackageManager 相关类的敏感方法（不区分分身/普通应用）
+                        boolean isPackageManagerRelated =
+                                targetClass.getName().equals("android.content.pm.PackageManager") ||
+                                targetClass.getName().equals("android.app.ApplicationPackageManager") ||
+                                targetClass.getName().contains("PackageManager");
+
+                        boolean isSensitiveMethod =
+                                methodName.contains("getPackageInfoAsUser") ||
+                                methodName.contains("getApplicationInfoAsUser") ||
+                                methodName.contains("getInstalledPackagesAsUser") ||
+                                methodName.contains("getInstalledApplicationsAsUser") ||
+                                methodName.contains("hidden") ||
+                                methodName.contains("internal") ||
+                                methodName.contains("AsUser");
+
+                        if (isPackageManagerRelated && isSensitiveMethod) {
+                            // 核心逻辑：不判断是否为分身，直接尝试阻断，异常则放行
+                            try {
+                                // 尝试获取当前应用上下文（仅作兼容校验，失败不影响）
+                                Context context = (Context) XposedHelpers.callStaticMethod(
+                                        XposedHelpers.findClass("android.app.ActivityThread", null),
+                                        "currentApplication"
+                                );
+                                // 无异常则阻断敏感方法（普通应用场景）
+                                param.setResult(null);
+                              //  log("✅ 拦截 PackageManager 敏感反射方法: " + methodName);
+                            } catch (Throwable e) {
+                                // 任何异常（分身权限不足、上下文获取失败等），直接放行
+                             //   log("⚠️ 执行拦截失败（可能是分身环境），跳过 Hook: " + e.getMessage());
+                            }
+                        }
+                    } catch (Throwable t) {
+                        // 外层兜底捕获，绝对避免影响应用运行
+                        log("反射 Hook 全局异常: " + t.getMessage());
+                    }
+                }
             }
-          }
-        }
-      );
+        );
+    //    log("✅ 成功Hook PackageManager 反射监控（兼容任意分身/包名/UID）");
     } catch (Throwable t) {
-      //   log("Hook反射监控失败: " + t.getMessage());
+        log("Hook反射监控初始化失败: " + t.getMessage());
     }
-  }
+}
+
+
 
   // ========== PackageManager扩展方法 ==========
   private void hookIsApplicationEnabled(ClassLoader classLoader) {
@@ -6375,10 +8605,10 @@ public class HookInit implements IXposedHookLoadPackage {
         command.contains("dumpsys package") ||
         command.contains("dumpsys activity") ||
         command.contains("dumpsys meminfo") ||
-        command.contains("dumpsys package --check") || 
-        command.contains("dumpsys package --verify") || 
+        command.contains("dumpsys package --check") ||
+        command.contains("dumpsys package --verify") ||
         command.contains("dumpsys package --brief")
-      ); 
+      );
     }
 
     // 3. 扩展cmd命令拦截（Android 11+）
@@ -7566,6 +9796,8 @@ public class HookInit implements IXposedHookLoadPackage {
   // ========== Flutter MethodChannel 检测拦截 ==========
   private void hookFlutterMethodChannelCheck(final ClassLoader classLoader) {
     try {
+    // 先判断 Flutter 核心类是否存在，不存在则跳过
+     Class<?> flutterClass = XposedHelpers.findClassIfExists("io.flutter.embedding.engine.dart.DartMessenger", classLoader);
       // 先判断是否为Flutter应用（避免无效Hook）
       if (!isFlutterApp(classLoader)) {
         //   log("⚠️ 非Flutter应用，跳过MethodChannel Hook");
@@ -7974,7 +10206,9 @@ public class HookInit implements IXposedHookLoadPackage {
 
   // ========== 文件路径验证检测拦截 ==========
   private void hookFileSystemInstallCheck(ClassLoader classLoader) {
+  
     try {
+    
       // Hook File.exists() - 拦截安装路径存在性检测
       XposedHelpers.findAndHookMethod(
         "java.io.File",
@@ -8006,6 +10240,7 @@ public class HookInit implements IXposedHookLoadPackage {
         }
       );
 
+
       // Hook File.isDirectory() - 拦截目录验证
       XposedHelpers.findAndHookMethod(
         "java.io.File",
@@ -8031,6 +10266,7 @@ public class HookInit implements IXposedHookLoadPackage {
           }
         }
       );
+      
       //    log("✅ 已Hook文件路径验证检测（exists/isDirectory）");
     } catch (Throwable t) {
       log("Hook文件路径检测失败: " + t.getMessage());
@@ -8055,17 +10291,28 @@ public class HookInit implements IXposedHookLoadPackage {
   // 辅助方法：从路径中提取包名
   private String extractPackageFromPath(String path) {
     try {
+    /*
       // 匹配 /data/data/包名、/data/app/包名-1、/data/user/0/包名 等格式
       java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
         "/data/(data|app|user/\\d+|user_de/\\d+)/([a-zA-Z0-9._]+)"
       );
+      
       java.util.regex.Matcher matcher = pattern.matcher(path);
       if (matcher.find()) {
         return matcher.group(2);
       }
+      */
+              java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+            "/data/app/([a-zA-Z0-9._]+)-\\d+"
+        );
+        java.util.regex.Matcher matcher = pattern.matcher(path);
+        if (matcher.find()) {
+            return matcher.group(1).replace('-', '.');
+        }
     } catch (Throwable t) {}
     return null;
   }
+  
 
   // ========== OkHttp网络Hook ==========
   private void hookOkHttp(ClassLoader classLoader) {
@@ -8159,6 +10406,312 @@ public class HookInit implements IXposedHookLoadPackage {
     }
   }
 
+  // 辅助方法1：校验包名是否真实安装（系统原生查询，不受模块伪造影响）
+  private boolean isPackageReallyInstalled(String packageName) {
+    try {
+      Context context = (Context) XposedHelpers.callStaticMethod(
+        XposedHelpers.findClass("android.app.ActivityThread", null),
+        "currentApplication"
+      );
+      PackageManager pm = context.getPackageManager();
+      pm.getPackageInfo(packageName, PackageManager.GET_ACTIVITIES);
+      return true;
+    } catch (PackageManager.NameNotFoundException e) {
+      return false;
+    } catch (Throwable t) {
+      return false;
+    }
+  }
+
+  // 辅助方法2：判断包名是否在捕获列表中（手动+自动添加）
+  private boolean isPackageInCapturedList(String packageName) {
+    synchronized (globalCapturedPackages) {
+      return globalCapturedPackages.contains(packageName);
+    }
+  }
+
+  // 应用启动拦截
+  private void hookStartActivity(ClassLoader classLoader) {
+    try {
+        XposedHelpers.findAndHookMethod(
+            "android.app.Instrumentation",
+            classLoader,
+            "execStartActivity",
+            Context.class,
+            IBinder.class,
+            IBinder.class,
+            Activity.class,
+            Intent.class,
+            int.class,
+            Bundle.class,
+            new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    final Intent intent = (Intent) param.args[4];
+                    if (intent == null) return;
+
+                    // ========== 1. 常用App登录授权过滤（放行） ==========
+                    String[] authAppPackages = {
+                        // 国内常用
+                        "com.tencent.mm", // 微信
+                        "com.qq.mobileqq", // QQ
+                        "com.alipay.mobile.securitycommon", // 支付宝
+                        "com.sina.weibo", // 微博
+                        "com.baidu.account", // 百度账号
+                        "com.tencent.wework", // 企业微信
+                        "com.dingtalk", // 钉钉
+                        "com.bytedance.ss.android.ugc.aweme", // 抖音
+                        "com.xiaomi.account", // 小米账号
+                        "com.huawei.hwid", // 华为账号
+                        "com.oppo.account", // OPPO账号
+                        "com.vivo.account", // VIVO账号
+                        "com.meizu.account", // 魅族账号
+                        "com.lenovo.account", // 联想账号
+                        "com.samsung.android.mobileservice", // 三星账号
+                        // 国外常用
+                        "com.google.android.gms", // Google 登录
+                        "com.facebook.katana", // Facebook
+                        "com.twitter.android", // Twitter
+                        "com.instagram.android", // Instagram
+                        "com.linkedin.android", // LinkedIn
+                        "com.pinterest", // Pinterest
+                        "com.tumblr", // Tumblr
+                        "com.microsoft.office.officehubrow", // Microsoft
+                        "com.apple.android.music", // Apple 登录
+                        // 其他授权类App
+                        "com.auth0.lock", // Auth0
+                        "com.okta.mobile", // Okta
+                        "com.paypal.android.p2pmobile", // PayPal
+                    };
+
+                    // ========== 2. 登录授权相关类名关键词过滤（放行） ==========
+                    String[] authClassKeywords = {
+                        "Login", "Auth", "Authorization", "OAuth", "OAuth2",
+                        "LoginActivity", "AuthActivity", "AuthorizeActivity",
+                        "Wechat", "QQAuth", "WeiboAuth", "AlipayAuth",
+                        "GoogleAuth", "FacebookAuth", "TwitterAuth",
+                        "AccountLogin", "UserLogin", "SignIn", "SignUp",
+                        "Sso", "SingleSignOn", "OauthCallback"
+                    };
+
+                    // ========== 3. 网页授权平台过滤（放行） ==========
+                    String[] webAuthSchemes = {
+                        "http", "https", "oauth", "oauth2", "openid",
+                        "github", "git", "google", "facebook", "twitter",
+                        "linkedin", "instagram", "pinterest", "tumblr",
+                        "microsoft", "apple", "wechat", "qq", "weibo", "alipay"
+                    };
+
+                    String[] webAuthHosts = {
+                        // GitHub 相关
+                        "github.com", "github.io", "oauth.github.com", "accounts.github.com",
+                        // Google 相关
+                        "google.com", "accounts.google.com", "oauth2.googleapis.com",
+                        // Facebook 相关
+                        "facebook.com", "fb.com", "accounts.facebook.com",
+                        // Twitter 相关
+                        "twitter.com", "api.twitter.com", "auth.twitter.com",
+                        // 其他国外平台
+                        "linkedin.com", "www.linkedin.com", "api.linkedin.com",
+                        "instagram.com", "www.instagram.com",
+                        "pinterest.com", "www.pinterest.com",
+                        "tumblr.com", "www.tumblr.com",
+                        "microsoft.com", "login.live.com", "account.live.com",
+                        "apple.com", "appleid.apple.com",
+                        "auth0.com", "okta.com",
+                        // 国内平台
+                        "weixin110.qq.com", "open.weixin.qq.com", // 微信开放平台
+                        "graph.qq.com", "open.mobile.qq.com", // QQ开放平台
+                        "api.weibo.com", "open.weibo.com", // 微博开放平台
+                        "open.alipay.com", "auth.alipay.com", // 支付宝开放平台
+                        "openapi.baidu.com", "passport.baidu.com", // 百度开放平台
+                        "developers.dingtalk.com", "oapi.dingtalk.com", // 钉钉开放平台
+                        "qyapi.weixin.qq.com", // 企业微信开放平台
+                        "openapi.bytedance.com", // 字节跳动开放平台
+                    };
+
+                    // ========== 4. 过滤逻辑执行 ==========
+                    String targetPkg = null;
+                    ComponentName cn = intent.getComponent();
+
+                    // 4.1 组件名过滤（类名包含授权关键词 → 放行）
+                    if (cn != null) {
+                        targetPkg = cn.getPackageName();
+                        String className = cn.getClassName();
+                        for (String keyword : authClassKeywords) {
+                            if (className.contains(keyword)) {
+                                return;
+                            }
+                        }
+                    } else {
+                        targetPkg = intent.getPackage();
+                    }
+
+                    // 4.2 包名过滤（属于授权App → 放行）
+                    if (targetPkg != null) {
+                        for (String authPkg : authAppPackages) {
+                            if (targetPkg.equals(authPkg) || targetPkg.startsWith(authPkg)) {
+                                return;
+                            }
+                        }
+                    }
+
+                    // 4.3 网页授权过滤（Scheme/Host 匹配 → 放行）
+                    Uri data = intent.getData();
+                    if (data != null) {
+                        String scheme = data.getScheme();
+                        String host = data.getHost();
+
+                        // Scheme 匹配网页/授权协议
+                        if (scheme != null) {
+                            for (String authScheme : webAuthSchemes) {
+                                if (authScheme.equalsIgnoreCase(scheme)) {
+                                    return;
+                                }
+                            }
+                        }
+
+                        // Host 匹配授权域名
+                        if (host != null) {
+                            for (String authHost : webAuthHosts) {
+                                if (host.contains(authHost)) {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+
+                    // ========== 5. 原有伪造启动逻辑 ==========
+                    if (intent.hasExtra("__hook_skip_flag")) {
+                        return;
+                    }
+
+                    boolean isInternal = false;
+                    boolean isSpecificActivity = (cn != null);
+                    if (cn != null) {
+                        Context selfContext = (Context) param.args[0];
+                        if (targetPkg != null && targetPkg.equals(selfContext.getPackageName())) {
+                            isInternal = true;
+                        }
+                    }
+
+                    final String pkg = targetPkg;
+                    final boolean finalIsInternal = isInternal;
+                    final boolean finalIsSpecificAct = isSpecificActivity;
+                    if (pkg == null) return;
+
+                    // 仅对捕获列表中的非授权App执行伪造逻辑
+                    if (!isPackageInCapturedList(pkg) || !isPackageReallyInstalled(pkg)) {
+                        return;
+                    }
+
+                    param.setResult(null);
+                    final Intent oriIntent = new Intent(intent);
+                    final Activity activity = (Activity) param.args[3];
+                    final int reqCode = (int) param.args[5];
+
+                    new Handler(Looper.getMainLooper()).post(new Runnable() {
+                        @Override
+                        public void run() {
+                            String[] btnArray;
+                            String msg = "当前应用想要打开应用\n" + pkg + "\n\n请问是否需要伪造启动？";
+                            if (finalIsInternal || finalIsSpecificAct) {
+                                btnArray = new String[]{"虚假启动", "取消"};
+                            } else {
+                                btnArray = new String[]{"虚假启动", "真实打开", "取消"};
+                            }
+
+                            AlertDialog dialog = createBoundedDialog(
+                                activity,
+                                "启动确认",
+                                msg,
+                                btnArray,
+                                new DialogInterface.OnClickListener[]{
+                                    new DialogInterface.OnClickListener() {
+                                        @Override
+                                        public void onClick(DialogInterface dialog, int which) {
+                                            dialog.dismiss();
+                                            try {
+                                                if (reqCode != 0 && activity != null && !activity.isFinishing()) {
+                                                    java.lang.reflect.Method m = Activity.class.getDeclaredMethod(
+                                                        "onActivityResult",
+                                                        int.class, int.class, Intent.class
+                                                    );
+                                                    m.setAccessible(true);
+                                                    m.invoke(activity, reqCode, Activity.RESULT_OK, null);
+                                                }
+                                            } catch (Throwable ignored) {}
+                                            Toast.makeText(activity, "已伪造启动：" + pkg, Toast.LENGTH_SHORT).show();
+                                        }
+                                    },
+                                    new DialogInterface.OnClickListener() {
+                                        @Override
+                                        public void onClick(DialogInterface dialog, int which) {
+                                            dialog.dismiss();
+                                            if (finalIsInternal || finalIsSpecificAct) {
+                                                try {
+                                                    if (reqCode != 0 && activity != null && !activity.isFinishing()) {
+                                                        java.lang.reflect.Method m = Activity.class.getDeclaredMethod(
+                                                            "onActivityResult",
+                                                            int.class, int.class, Intent.class
+                                                        );
+                                                        m.setAccessible(true);
+                                                        m.invoke(activity, reqCode, Activity.RESULT_CANCELED, null);
+                                                    }
+                                                } catch (Throwable ignored) {}
+                                                Toast.makeText(activity, "已取消启动：" + pkg, Toast.LENGTH_SHORT).show();
+                                            } else {
+                                                try {
+                                                    Intent newIntent = new Intent(oriIntent);
+                                                    newIntent.putExtra("__hook_skip_flag", true);
+                                                    activity.startActivity(newIntent);
+                                                    Toast.makeText(activity, "已真实打开：" + pkg, Toast.LENGTH_SHORT).show();
+                                                } catch (Throwable e) {
+                                                    log("真实启动异常: " + e.getMessage());
+                                                    Toast.makeText(activity, "启动失败（应用限制）", Toast.LENGTH_SHORT).show();
+                                                }
+                                            }
+                                        }
+                                    },
+                                    new DialogInterface.OnClickListener() {
+                                        @Override
+                                        public void onClick(DialogInterface dialog, int which) {
+                                            dialog.dismiss();
+                                            try {
+                                                if (reqCode != 0 && activity != null && !activity.isFinishing()) {
+                                                    java.lang.reflect.Method m = Activity.class.getDeclaredMethod(
+                                                        "onActivityResult",
+                                                        int.class, int.class, Intent.class
+                                                    );
+                                                    m.setAccessible(true);
+                                                    m.invoke(activity, reqCode, Activity.RESULT_CANCELED, null);
+                                                }
+                                            } catch (Throwable ignored) {}
+                                            Toast.makeText(activity, "已取消启动：" + pkg, Toast.LENGTH_SHORT).show();
+                                        }
+                                    }
+                                }
+                            );
+                            dialog.show();
+                        }
+                    });
+                }
+            }
+        );
+    } catch (Throwable e) {
+        log("hookStartActivity 异常: " + e.getMessage());
+    }
+}
+
+
+
+
+
+
+
+
+
+  /*
   // ========== 应用启动拦截 ==========
   private void hookStartActivity(ClassLoader classLoader) {
     try {
@@ -8270,6 +10823,7 @@ public class HookInit implements IXposedHookLoadPackage {
       log("Hook startActivity失败: " + t.getMessage());
     }
   }
+  */
 
   // ========== 辅助工具方法 ==========
   private boolean isDetectionUrl(String url) {
@@ -8468,191 +11022,487 @@ public class HookInit implements IXposedHookLoadPackage {
     return pkgMap;
   }
 
-  // ========== 内嵌模式专用方法 ==========
-  // ========== 内嵌模式专用方法（增强版） ==========
-  public void initForEmbed(
+// ========== 内嵌模式专用方法（完美兼容分身 + 空指针防护） ==========
+public void initForEmbed(
     ClassLoader classLoader,
     String targetPackageName,
     Context context
-  ) {
-    currentTargetApp = targetPackageName;
+) {
 
-    // 基础日志
-    log("【内嵌模式】开始初始化，目标包名: " + targetPackageName);
+// ========== 🚨【WebView子线程崩溃专杀】==========
+try {
+    // Hook WebView 的所有子线程创建，直接吞掉空指针
+    XposedHelpers.findAndHookMethod(
+        "android.webkit.WebView",
+        null,
+        "onDraw",
+        android.graphics.Canvas.class,
+        new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                // 什么都不做，只是防止崩溃
+            }
+        }
+    );
+} catch (Throwable ignored) {}
 
-    // ========== 1. 上下文和类加载器增强获取 ==========
-    Context effectiveContext = null;
-    ClassLoader effectiveClassLoader = null;
-
-    // 1.1 尝试从传入参数获取
-    if (context != null) {
-      effectiveContext = context;
-      log("【内嵌模式】使用传入的Context");
-    }
-
-    if (classLoader != null) {
-      effectiveClassLoader = classLoader;
-      log("【内嵌模式】使用传入的ClassLoader");
-    }
-
-    // 1.2 如果参数为空，尝试多种方式获取Context
-    if (effectiveContext == null) {
-      try {
-        // 方式1：通过ActivityThread获取当前应用的Context
-        Class<?> activityThreadClass = Class.forName(
-          "android.app.ActivityThread"
-        );
-        Object activityThread = XposedHelpers.callStaticMethod(
-          activityThreadClass,
-          "currentActivityThread"
-        );
-        if (activityThread != null) {
-          effectiveContext = (Context) XposedHelpers.callMethod(
-            activityThread,
-            "getApplication"
-          );
-          if (effectiveContext != null) {
-            log(
-              "【内嵌模式】通过ActivityThread获取到Context: " +
-              effectiveContext.getPackageName()
+try {
+    // Hook Chromium 内核的崩溃点
+    XposedHelpers.findAndHookMethod(
+        "org.chromium.android_webview.AwContents",
+        null,
+        "destroy",
+        new XC_MethodReplacement() {
+            @Override
+            protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
+                return null; // 防止销毁时崩溃
+            }
+        }
+    );
+} catch (Throwable ignored) {}
+// ========== 🚨【终极暴力修复】Hook所有Bundle方法（可编译版）==========
+try {
+    Class<?> bundleClass = Class.forName("android.os.Bundle");
+    
+    // 使用 findAndHookMethod 逐个 Hook 关键方法，而不是 hookAllMethods
+    String[] bundleMethods = {
+        "getString", "getInt", "getBoolean", "getLong", 
+        "getDouble", "getFloat", "getBundle", "getSerializable",
+        "getParcelable", "containsKey"
+    };
+    
+    for (final String methodName : bundleMethods) {
+        try {
+            // Hook 单参数版本
+            XposedHelpers.findAndHookMethod(
+                bundleClass,
+                methodName,
+                String.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (param.thisObject == null) {
+                            setDefaultReturnValue(param);
+                            return;
+                        }
+                        // 检测Bundle是否可用
+                        try {
+                            ((Bundle) param.thisObject).hashCode();
+                        } catch (Throwable e) {
+                            setDefaultReturnValue(param);
+                        }
+                    }
+                    
+                    private void setDefaultReturnValue(MethodHookParam param) {
+                        if (methodName.equals("getString")) param.setResult("");
+                        else if (methodName.equals("getInt")) param.setResult(0);
+                        else if (methodName.equals("getBoolean")) param.setResult(false);
+                        else if (methodName.equals("getLong")) param.setResult(0L);
+                        else if (methodName.equals("getDouble")) param.setResult(0.0);
+                        else if (methodName.equals("getFloat")) param.setResult(0.0f);
+                        else if (methodName.equals("getBundle")) param.setResult(new Bundle());
+                        else param.setResult(null);
+                    }
+                }
             );
-          }
-        }
-      } catch (Throwable t) {
-        log("【内嵌模式】方式1获取Context失败: " + t.getMessage());
-      }
+        } catch (Throwable ignored) {}
+        
+        try {
+            // Hook 双参数版本（带默认值）
+            XposedHelpers.findAndHookMethod(
+                bundleClass,
+                methodName,
+                String.class,
+                Object.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (param.thisObject == null) {
+                            param.setResult(param.args[1]);
+                            return;
+                        }
+                        try {
+                            Bundle b = (Bundle) param.thisObject;
+                            if (!b.containsKey((String) param.args[0])) {
+                                param.setResult(param.args[1]);
+                            }
+                        } catch (Throwable e) {
+                            param.setResult(param.args[1]);
+                        }
+                    }
+                }
+            );
+        } catch (Throwable ignored) {}
     }
-
-    if (effectiveContext == null) {
-      try {
-        // 方式2：通过反射调用getApplicationContext
-        effectiveContext = (Context) XposedHelpers.callStaticMethod(
-          XposedHelpers.findClass("android.app.ActivityThread", null),
-          "currentApplication"
+    
+    // 特别处理 getString(String, String) 确保万无一失
+    try {
+        XposedHelpers.findAndHookMethod(
+            bundleClass,
+            "getString",
+            String.class,
+            String.class,
+            new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    if (param.thisObject == null) {
+                        param.setResult(param.args[1]);
+                        return;
+                    }
+                    try {
+                        Bundle b = (Bundle) param.thisObject;
+                        if (!b.containsKey((String) param.args[0])) {
+                            param.setResult(param.args[1]);
+                        }
+                    } catch (Throwable e) {
+                        param.setResult(param.args[1]);
+                    }
+                }
+            }
         );
-        if (effectiveContext != null) {
-          log(
-            "【内嵌模式】通过currentApplication获取到Context: " +
-            effectiveContext.getPackageName()
-          );
+    } catch (Throwable ignored) {}
+    
+    //XposedBridge.log("[InstallHook] ✅ Bundle暴力修复完成（可编译版）");
+    
+} catch (Throwable e) {
+    //XposedBridge.log("[InstallHook] ❌ Bundle暴力修复失败: " + e.getMessage());
+}
+    
+    // ========== 🚨【强制全局异常捕获】==========
+try {
+    // 先设置我们自己的Handler
+    final Thread.UncaughtExceptionHandler ourHandler = new Thread.UncaughtExceptionHandler() {
+        @Override
+        public void uncaughtException(Thread t, Throwable e) {
+            if (e instanceof NullPointerException) {
+                StackTraceElement[] stack = e.getStackTrace();
+                if (stack.length > 0) {
+                    String className = stack[0].getClassName();
+                    if (className.contains("Bundle") || 
+                        className.contains("PackageManager") ||
+                        className.contains("ContextImpl") ||
+                        className.contains("ApplicationPackageManager")) {
+                        //XposedBridge.log("[InstallHook] 💪 拦截崩溃: " +    className + "." + stack[0].getMethodName());
+                        return;
+                    }
+                }
+            }
+            // 交给系统默认Handler
+            Thread.UncaughtExceptionHandler defaultHandler = 
+                Thread.getDefaultUncaughtExceptionHandler();
+            if (defaultHandler != null && defaultHandler != this) {
+                defaultHandler.uncaughtException(t, e);
+            }
         }
-      } catch (Throwable t) {
-        log("【内嵌模式】方式2获取Context失败: " + t.getMessage());
-      }
-    }
-
-    if (effectiveContext == null) {
-      try {
-        // 方式3：尝试创建代理Context
-        effectiveContext = createProxyContext(targetPackageName);
-        if (effectiveContext != null) {
-          log("【内嵌模式】使用代理Context");
+    };
+    
+    // 设置我们的Handler
+    Thread.setDefaultUncaughtExceptionHandler(ourHandler);
+    
+    // Hook setDefaultUncaughtExceptionHandler 防止被覆盖
+    XposedHelpers.findAndHookMethod(
+        "java.lang.Thread",
+        null,
+        "setDefaultUncaughtExceptionHandler",
+        Thread.UncaughtExceptionHandler.class,
+        new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                // 不允许覆盖我们的Handler
+                //XposedBridge.log("[InstallHook] ⚠️ 阻止应用设置自己的异常处理器");
+                param.setResult(null);
+            }
         }
-      } catch (Throwable t) {
-        log("【内嵌模式】方式3获取Context失败: " + t.getMessage());
-      }
-    }
-
-    // 1.3 获取ClassLoader
-    if (effectiveClassLoader == null && effectiveContext != null) {
-      effectiveClassLoader = effectiveContext.getClassLoader();
-      if (effectiveClassLoader != null) {
-        log("【内嵌模式】从Context获取ClassLoader成功");
-      }
-    }
-
-    if (effectiveClassLoader == null) {
-      try {
-        // 回退方案：使用当前线程的ClassLoader
-        effectiveClassLoader = Thread.currentThread().getContextClassLoader();
-        log("【内嵌模式】使用线程ClassLoader作为回退");
-      } catch (Throwable t) {
-        effectiveClassLoader = getClass().getClassLoader();
-        log("【内嵌模式】使用自身ClassLoader作为最后回退");
-      }
-    }
-
-    // 如果所有获取方式都失败，记录错误并返回
-    if (effectiveContext == null || effectiveClassLoader == null) {
-      log("❌【内嵌模式】无法获取有效的Context或ClassLoader，初始化失败");
-      log("Context: " + effectiveContext);
-      log("ClassLoader: " + effectiveClassLoader);
-      return;
-    }
-
-    // 更新当前目标包名为Context的实际包名
-    if (effectiveContext != null) {
-      String actualPackage = effectiveContext.getPackageName();
-      if (actualPackage != null && !actualPackage.isEmpty()) {
-        currentTargetApp = actualPackage;
-        log("【内嵌模式】更新目标包名为: " + currentTargetApp);
-      }
-    }
-
-    // ========== 2. 系统包过滤 ==========
-    if (
-      isSystemPackage(currentTargetApp) ||
-      currentTargetApp.equals("com.install.appinstall.xl")
-    ) {
-      log("✅【内嵌模式】跳过系统包或自身包: " + currentTargetApp);
-      return;
-    }
-
-    // ========== 3. 初始化配置和状态 ==========
+    );
+    
+    //XposedBridge.log("[InstallHook] ✅ 强制全局异常捕获已启用");
+    
+} catch (Throwable e) {
+    //XposedBridge.log("[InstallHook] ❌ 强制异常捕获失败: " + e.getMessage());
+}
+    
+    // ========== 🚨【内嵌核心修复1】全局空指针保护（加到最前面）==========
     try {
-      // 3.1 加载配置文件
-      loadConfigFromFile();
-      log("【内嵌模式】配置文件加载完成");
-
-      // 3.2 初始化默认状态
-      if (!installStatusMap.containsKey(currentTargetApp)) {
-        installStatusMap.put(currentTargetApp, true);
-        log("【内嵌模式】初始化安装状态为: 已安装");
-      }
-
-      if (!floatingShownMap.containsKey(currentTargetApp)) {
-        floatingShownMap.put(currentTargetApp, true);
-        log("【内嵌模式】初始化悬浮窗显示状态为: 显示");
-      }
-
-      if (!blockExitMap.containsKey(currentTargetApp)) {
-        blockExitMap.put(currentTargetApp, false);
-        log("【内嵌模式】初始化退出拦截状态为: 关闭");
-      }
-
-      // 3.3 保存初始化配置
-      saveConfigToFile();
-      log("【内嵌模式】初始配置已保存");
-    } catch (Throwable t) {
-      log("❌【内嵌模式】配置初始化失败: " + t.getMessage());
+        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+            @Override
+            public void uncaughtException(Thread t, Throwable e) {
+                // 只处理空指针
+                if (e instanceof NullPointerException) {
+                    StackTraceElement[] stack = e.getStackTrace();
+                    if (stack.length > 0) {
+                        String className = stack[0].getClassName();
+                        String methodName = stack[0].getMethodName();
+                        
+                        // 只要是我们Hook的包，全部吞掉
+                        if (className.contains("android.os.Bundle") ||
+                            className.contains("android.content.pm.PackageManager") ||
+                            className.contains("android.app.ApplicationPackageManager") ||
+                            className.contains("android.app.Activity") ||
+                            className.contains("android.content.Context") ||
+                            className.contains("PackageManager") ||
+                            className.contains("Bundle")) {
+                            
+                          //  log("🛡️【内嵌模式】拦截子线程空指针: " +  className + "." + methodName);
+                            return; // 不崩溃
+                        }
+                    }
+                }
+                
+                // 其他崩溃交给系统
+                Thread.UncaughtExceptionHandler defaultHandler = 
+                    Thread.getDefaultUncaughtExceptionHandler();
+                if (defaultHandler != null && defaultHandler != this) {
+                    defaultHandler.uncaughtException(t, e);
+                }
+            }
+        });
+        log("✅【内嵌模式】全局空指针保护已启用");
+    } catch (Throwable ignored) {}
+    
+    // ========== 🚨【内嵌核心修复2】获取真实Context和ClassLoader ==========
+    Context realContext = context;
+    ClassLoader realClassLoader = classLoader;
+    String realPackageName = targetPackageName;
+    
+    // 2.1 优先使用传入的Context，但尝试获取更真实的实例
+    if (realContext == null) {
+        try {
+            realContext = (Context) XposedHelpers.callStaticMethod(
+                XposedHelpers.findClass("android.app.ActivityThread", null),
+                "currentApplication"
+            );
+        } catch (Throwable e) {
+            log("【内嵌模式】获取ActivityThread Context失败: " + e.getMessage());
+        }
     }
-
-    // ========== 4. 核心Hook方法执行 ==========
+    
+    // 2.2 如果还是null，尝试通过反射获取
+    if (realContext == null) {
+        try {
+            realContext = (Context) XposedHelpers.callStaticMethod(
+                XposedHelpers.findClass("android.app.AppGlobals", null),
+                "getInitialApplication"
+            );
+        } catch (Throwable e) {
+            log("【内嵌模式】获取AppGlobals失败: " + e.getMessage());
+        }
+    }
+    
+    // 2.3 获取真实包名和ClassLoader
+    if (realContext != null) {
+        try {
+            realPackageName = realContext.getPackageName();
+            realClassLoader = realContext.getClassLoader();
+            log("✅【内嵌模式】获取真实信息: " + realPackageName);
+        } catch (Throwable e) {
+            log("❌【内嵌模式】获取真实信息失败: " + e.getMessage());
+        }
+    }
+    
+    // 2.4 ClassLoader降级方案
+    if (realClassLoader == null) {
+        if (classLoader != null) {
+            realClassLoader = classLoader;
+            log("✅【内嵌模式】使用传入ClassLoader");
+        } else if (realContext != null) {
+            realClassLoader = realContext.getClassLoader();
+            log("✅【内嵌模式】从Context获取ClassLoader");
+        } else {
+            realClassLoader = getClass().getClassLoader();
+            log("✅【内嵌模式】使用自身ClassLoader作为最后回退");
+        }
+    }
+    
+    // 2.5 包名降级方案
+    if (realPackageName == null || realPackageName.isEmpty()) {
+        realPackageName = targetPackageName != null ? targetPackageName : "unknown";
+        log("✅【内嵌模式】使用传入包名: " + realPackageName);
+    }
+    
+    // ========== 🚨【内嵌核心修复3】主动修复so路径（不等任何回调）==========
+    if (realContext != null) {
+        try {
+            ApplicationInfo ai = realContext.getApplicationInfo();
+            if (ai != null) {
+                // 强制重置nativeLibraryDir，触发系统重新计算正确路径
+                XposedHelpers.setObjectField(ai, "nativeLibraryDir", ai.nativeLibraryDir);
+                log("✅【内嵌模式】主动修复.so路径: " + ai.nativeLibraryDir);
+            }
+        } catch (Throwable e) {
+            log("❌【内嵌模式】主动修复.so路径失败: " + e.getMessage());
+            
+            // 兜底方案：通过PackageManager再试一次
+            try {
+                PackageManager pm = realContext.getPackageManager();
+                ApplicationInfo ai = pm.getApplicationInfo(realPackageName, 0);
+                if (ai != null) {
+                    XposedHelpers.setObjectField(ai, "nativeLibraryDir", ai.nativeLibraryDir);
+                    log("✅【内嵌模式】兜底修复.so路径: " + ai.nativeLibraryDir);
+                }
+            } catch (Throwable t) {
+                log("❌【内嵌模式】兜底修复失败: " + t.getMessage());
+            }
+        }
+    }
+    
+    // ========== 🚨【内嵌核心修复4】主动加载配置（不等任何回调）==========
+    currentTargetApp = realPackageName;
     try {
-      log("【内嵌模式】开始执行Hook方法");
-
-      // 4.1 基础Hook方法
-      executePriorityHooks(effectiveClassLoader);
-
-      // 4.2 根据应用类型执行特定Hook
-      if (isFlutterApp(effectiveClassLoader)) {
-        log("【内嵌模式】检测到Flutter应用，执行Flutter相关Hook");
-        executeFlutterHooks(effectiveClassLoader);
-      }
-
-      // 4.3 执行UI相关Hook
-      executeUIHooks(effectiveClassLoader);
-
-      log("✅【内嵌模式】Hook方法执行完成");
-
-      // 4.4 显示初始化完成提示
-      showInitSuccessToast(effectiveContext);
-    } catch (Throwable t) {
-      log("❌【内嵌模式】Hook执行失败: " + t);
-      showInitFailToast(effectiveContext, t.getMessage());
+        loadConfigFromFile();
+        log("✅【内嵌模式】主动加载配置完成: " + currentTargetApp);
+    } catch (Throwable e) {
+        log("❌【内嵌模式】主动加载配置失败: " + e.getMessage());
+        createDefaultConfig();
     }
-  }
+    
+    // ========== 初始化日志 ==========
+    log("==========================================");
+    log("【内嵌模式】目标包名: " + realPackageName);
+    log("【内嵌模式】Context: " + (realContext != null ? "有效" : "无效"));
+    log("【内嵌模式】ClassLoader: " + (realClassLoader != null ? "有效" : "无效"));
+    log("==========================================");
+    
+    // ========== 系统包过滤 ==========
+    if (isSystemPackage(currentTargetApp) || 
+        currentTargetApp.equals("com.install.appinstall.xl")) {
+        log("✅【内嵌模式】跳过系统包或自身包: " + currentTargetApp);
+        return;
+    }
+    
+    // ========== 初始化配置状态（确保默认值）==========
+    try {
+        if (!installStatusMap.containsKey(currentTargetApp)) {
+            installStatusMap.put(currentTargetApp, true);
+            log("✅【内嵌模式】初始化安装状态为: 已安装");
+        }
+        if (!floatingShownMap.containsKey(currentTargetApp)) {
+            floatingShownMap.put(currentTargetApp, true);
+            log("✅【内嵌模式】初始化悬浮窗状态为: 显示");
+        }
+        if (!blockExitMap.containsKey(currentTargetApp)) {
+            blockExitMap.put(currentTargetApp, false);
+            log("✅【内嵌模式】初始化退出拦截状态为: 关闭");
+        }
+        if (!permissionFakeMap.containsKey(currentTargetApp)) {
+            permissionFakeMap.put(currentTargetApp, true);
+            log("✅【内嵌模式】初始化权限伪造状态为: 开启");
+        }
+        if (!userDefinedPackagesMap.containsKey(currentTargetApp)) {
+            userDefinedPackagesMap.put(currentTargetApp, new ArrayList<>());
+        }
+        if (!excludedPackagesMap.containsKey(currentTargetApp)) {
+            excludedPackagesMap.put(currentTargetApp, new ArrayList<>());
+        }
+        
+        saveConfigToFile();
+        log("✅【内嵌模式】初始配置已保存");
+    } catch (Throwable t) {
+        log("❌【内嵌模式】配置初始化失败: " + t.getMessage());
+    }
+    
+    // ========== 🚨【内嵌核心修复5】先执行Bundle防护（防止刚Hook就崩溃）==========
+    try {
+        // 先修复Bundle空指针问题
+        hookBundleGetString(realClassLoader);
+        hookBundleEmptyInstance(realClassLoader);
+        log("✅【内嵌模式】Bundle空指针防护完成");
+    } catch (Throwable t) {
+        log("❌【内嵌模式】Bundle防护失败: " + t.getMessage());
+    }
+    
+    // ========== 🚨【内嵌核心修复6】所有Hook方法必须使用真实ClassLoader ==========
+    try {
+        log("【内嵌模式】开始执行Hook方法");
+        
+        // 第1级：基础环境准备（Bundle已经Hook过了）
+        log("✅【内嵌模式】基础环境Hook完成");
+        
+        // 第2级：权限伪造（关键防御）
+        try {
+            hookQueryAllPackagesPermission(realClassLoader);
+            hookPackageUsageStatsPermission(realClassLoader);
+            log("✅【内嵌模式】权限伪造Hook完成");
+        } catch (Throwable t) {
+            log("❌【内嵌模式】权限伪造Hook失败: " + t.getMessage());
+        }
+        
+        // 第3级：退出拦截（用户体验保障）
+        try {
+            hookExitMethods(realClassLoader);
+            hookIndirectExitMethods(realClassLoader);
+            hookGlobalExitSources(realClassLoader);
+            hookRunnableSystemExit(realClassLoader);
+            log("✅【内嵌模式】退出拦截Hook完成");
+        } catch (Throwable t) {
+            log("❌【内嵌模式】退出拦截Hook失败: " + t.getMessage());
+        }
+        
+        // 第4级：包管理核心伪造（数据层）
+        try {
+            hookKeyMethods(realClassLoader);
+            hookOverloadMethods(realClassLoader);
+            hookIsApplicationEnabled(realClassLoader);
+            hookCheckPermission(realClassLoader);
+            hookGetActivityInfo(realClassLoader);
+            log("✅【内嵌模式】包管理核心Hook完成");
+        } catch (Throwable t) {
+            log("❌【内嵌模式】包管理核心Hook失败: " + t.getMessage());
+        }
+        
+        // 第5级：Intent相关伪造（应用层）
+        try {
+            hookQueryIntentActivities(realClassLoader);
+            hookResolveActivity(realClassLoader);
+            hookQueryIntentServices(realClassLoader);
+            log("✅【内嵌模式】Intent相关Hook完成");
+        } catch (Throwable t) {
+            log("❌【内嵌模式】Intent相关Hook失败: " + t.getMessage());
+        }
+        
+        // 第6级：启动拦截
+        try {
+            hookStartActivity(realClassLoader);
+            log("✅【内嵌模式】启动拦截Hook完成");
+        } catch (Throwable t) {
+            log("❌【内嵌模式】启动拦截Hook失败: " + t.getMessage());
+        }
+        
+        // 第7级：OkHttp网络和跨平台框架
+        try {
+            hookOkHttp(realClassLoader);
+            hookFlutterPackageInfoPlus(realClassLoader);
+            hookFlutterAppInstalledChecker(realClassLoader);
+            hookFileSystemInstallCheck(realClassLoader);
+            hookReflectInstallCheck(realClassLoader);
+            hookFlutterMethodChannelCheck(realClassLoader);
+            log("✅【内嵌模式】网络/跨平台Hook完成");
+        } catch (Throwable t) {
+            log("❌【内嵌模式】网络/跨平台Hook失败: " + t.getMessage());
+        }
+        
+        // 第8级：UI和用户体验
+        try {
+            hookDialogCancelableMethods(realClassLoader);
+            hookActivityLifecycle(realClassLoader);
+            log("✅【内嵌模式】UI相关Hook完成");
+        } catch (Throwable t) {
+            log("❌【内嵌模式】UI相关Hook失败: " + t.getMessage());
+        }
+        
+        log("🎉【内嵌模式】所有Hook执行成功: " + currentTargetApp);
+        
+        // 显示初始化完成提示
+        showInitSuccessToast(realContext);
+        
+    } catch (Throwable t) {
+        log("❌【内嵌模式】Hook执行失败: " + t.getMessage());
+        t.printStackTrace();
+        showInitFailToast(realContext, t.getMessage());
+    }
+}
 
+
+/*
   // ========== 辅助方法：创建代理Context ==========
   private Context createProxyContext(final String packageName) {
     try {
@@ -8707,6 +11557,7 @@ public class HookInit implements IXposedHookLoadPackage {
       return null;
     }
   }
+  */
 
   // ========== 辅助方法：创建代理PackageManager ==========
   private Object createProxyPackageManager(String packageName) {
@@ -8785,19 +11636,20 @@ public class HookInit implements IXposedHookLoadPackage {
       hookResolveActivity(classLoader);
       hookQueryIntentServices(classLoader);
       log("✅【内嵌模式】Intent相关Hook完成");
-
+/*
       // 第6优先级：启动相关
       hookGetLaunchIntentForPackage(classLoader);
       hookCanStartActivity(classLoader);
+      */
       hookStartActivity(classLoader);
       log("✅【内嵌模式】启动相关Hook完成");
-
+/*
       // 第7优先级：文件系统
       hookFileSystemChecks(classLoader);
       hookLibDirectoryChecks(classLoader);
       hookRuntimeExecMethods(classLoader);
       log("✅【内嵌模式】文件系统Hook完成");
-
+*/
       // 第8优先级：网络相关
       hookOkHttp(classLoader);
       log("✅【内嵌模式】网络Hook完成");

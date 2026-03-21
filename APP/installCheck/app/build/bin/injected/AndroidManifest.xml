@@ -2,8 +2,8 @@
 <manifest
 	xmlns:android="http://schemas.android.com/apk/res/android"
 	package="com.install.appinstall.xl"
-	android:versionCode="58"
-	android:versionName="2.0.8">
+	android:versionCode="103"
+	android:versionName="2.0.37">
 
 	<uses-sdk
 		android:minSdkVersion="21"

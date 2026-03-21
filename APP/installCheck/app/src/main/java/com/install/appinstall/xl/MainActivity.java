@@ -78,7 +78,8 @@ public class MainActivity extends Activity {
             "🪟 实时切换 - 点击切换安装状态",
             "🪟 拦截开关 - 控制退出拦截功能",
             "🪟 位置记忆 - 记住悬浮窗拖动位置",
-            "🪟 悬浮窗控制 - 长按隐藏本次显示"
+            "🪟 悬浮窗控制 - 长按隐藏本次显示",
+            "🪟 自定义包名 - 双击悬浮窗可配置",
         },
         // 配置管理
         {
@@ -277,7 +278,7 @@ public class MainActivity extends Activity {
         statusView.setTextColor(isActivated ? ACTIVATED_COLOR : DEACTIVATED_COLOR);
         statusView.setGravity(Gravity.CENTER);
         statusView.setTypeface(null, android.graphics.Typeface.BOLD);
-
+/*
         // 提示文本
         final TextView hintView = new TextView(this);
         hintView.setText("点击刷新状态");
@@ -285,10 +286,10 @@ public class MainActivity extends Activity {
         hintView.setTextColor(0xFF888888);
         hintView.setGravity(Gravity.CENTER);
         hintView.setPadding(0, dp2px(8), 0, 0);
-
+*/
         statusContainer.addView(statusIcon);
         statusContainer.addView(statusView);
-        statusContainer.addView(hintView);
+     //   statusContainer.addView(hintView);
 
         // 点击事件
         statusContainer.setOnClickListener(new View.OnClickListener() {
@@ -753,7 +754,7 @@ public class MainActivity extends Activity {
 
         // 版本信息
         final TextView versionView = new TextView(this);
-        versionView.setText("版本: 2.0.8_58 (Build 2026.02.08)");
+        versionView.setText("版本: 2.0.37_103 (Build 2026.02.13)");
         versionView.setTextSize(12);
         versionView.setTextColor(DIALOG_TEXT_COLOR);
         versionView.setGravity(Gravity.CENTER);
