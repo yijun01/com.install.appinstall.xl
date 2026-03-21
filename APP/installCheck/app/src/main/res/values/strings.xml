@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">伪造安装模块</string>
+    <string name="xposed_activated">"Xposed: Activated"</string>
+    <string name="xposed_unactivated">"Xposed: Unactivated"</string>
+</resources>

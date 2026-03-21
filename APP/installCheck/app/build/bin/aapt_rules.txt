@@ -1,0 +1,6 @@
+# view AndroidManifest.xml #generated:18
+-keep class com.install.appinstall.xl.HookInit$HookProvider { <init>(...); }
+
+# view AndroidManifest.xml #generated:26
+-keep class com.install.appinstall.xl.MainActivity { <init>(...); }
+
