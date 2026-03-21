@@ -8,8 +8,8 @@ android {
         applicationId "com.install.appinstall.xl"
         minSdkVersion 21
         targetSdkVersion 28
-        versionCode 156
-        versionName "2.0.86"
+        versionCode 158
+        versionName "2.0.88"
     }
 
     buildTypes {

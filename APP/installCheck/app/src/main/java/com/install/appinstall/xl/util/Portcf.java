@@ -37,6 +37,7 @@ public class Portcf {
             appConfig.put("install_status", HookInit.installStatusMap.getOrDefault(currentTargetApp, true));
             appConfig.put("floating_shown", HookInit.floatingShownMap.getOrDefault(currentTargetApp, true));
             appConfig.put("block_exit", HookInit.blockExitMap.getOrDefault(currentTargetApp, false));
+            appConfig.put("super_block_exit", HookInit.superBlockExitMap.getOrDefault(currentTargetApp, false));
             appConfig.put("permission_fake", HookInit.permissionFakeMap.getOrDefault(currentTargetApp, true));
             appConfig.put("launch_intercept", HookInit.launchInterceptMap.getOrDefault(currentTargetApp, true));
             // ========== 新增：导出厂商包启用状态 ==========
@@ -135,6 +136,7 @@ public class Portcf {
             HookInit.installStatusMap.put(currentTargetApp, appConfig.optBoolean("install_status", true));
             HookInit.floatingShownMap.put(currentTargetApp, appConfig.optBoolean("floating_shown", true));
             HookInit.blockExitMap.put(currentTargetApp, appConfig.optBoolean("block_exit", false));
+            HookInit.superBlockExitMap.put(currentTargetApp, appConfig.optBoolean("super_block_exit", false));
             HookInit.permissionFakeMap.put(currentTargetApp, appConfig.optBoolean("permission_fake", true));
             HookInit.launchInterceptMap.put(currentTargetApp, appConfig.optBoolean("launch_intercept", true));
 
@@ -256,6 +258,7 @@ public class Portcf {
             summary.append("即将覆盖以下配置：<br><br>");
             summary.append("• 安装状态：").append(appConfig.optBoolean("install_status", true) ? "<font color='#4CAF50'>已安装</font>" : "<font color='#F44336'>未安装</font>").append("<br>");
             summary.append("• 拦截退出：").append(appConfig.optBoolean("block_exit", false) ? "<font color='#4CAF50'>开启</font>" : "<font color='#F44336'>关闭</font>").append("<br>");
+            summary.append("• 超强拦截：").append(appConfig.optBoolean("super_block_exit", false) ? "<font color='#4CAF50'>开启</font>" : "<font color='#F44336'>关闭</font>").append("<br>");
             summary.append("• 权限伪造：").append(appConfig.optBoolean("permission_fake", true) ? "<font color='#4CAF50'>开启</font>" : "<font color='#F44336'>关闭</font>").append("<br>");
             summary.append("• 启动拦截：").append(appConfig.optBoolean("launch_intercept", true) ? "<font color='#4CAF50'>开启</font>" : "<font color='#F44336'>关闭</font>").append("<br>");
 
@@ -276,7 +279,7 @@ public class Portcf {
             // ========== 新增：黑白名单统计 ==========
             JSONObject actionsJson = appConfig.optJSONObject("auto_actions");
             int actionCount = actionsJson != null ? actionsJson.length() : 0;
-            summary.append("• 黑白名单：<font color='#FF5722'><b>").append(actionCount).append("</b></font> 个条目<br>");
+            summary.append("• 黑白名单：<font color='#FF5722'><b>").append(actionCount).append("</b></font> 条记录<br>");
 
             // ========== 新增：智能记录统计 ==========
             JSONObject recordsJson = appConfig.optJSONObject("auto_records");
