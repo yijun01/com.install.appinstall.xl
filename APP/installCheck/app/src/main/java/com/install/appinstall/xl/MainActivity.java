@@ -884,7 +884,7 @@ public class MainActivity extends Activity {
         bottomContainer.setPadding(dp2px(20), dp2px(16), dp2px(20), dp2px(16));
 
         TextView versionView = new TextView(this);
-        versionView.setText("版本: 2.0.65_135 (Build 2026.02.20)");
+        versionView.setText("版本: 2.0.73_143 (Build 2026.03.01)");
         versionView.setTextSize(12);
         versionView.setTextColor(DIALOG_TEXT_COLOR);
         versionView.setGravity(Gravity.CENTER);
