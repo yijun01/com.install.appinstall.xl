@@ -28,79 +28,83 @@ import android.widget.Toast;
 import android.util.DisplayMetrics;
 import android.view.ViewTreeObserver;
 
+import com.install.appinstall.xl.util.Update;   // 导入更新工具类
+
 import java.util.ArrayList;
 import java.util.List;
+import android.content.pm.PackageInfo;
+import com.install.appinstall.xl.util.ToastUtil;
 
 public class MainActivity extends Activity {
     // 模块核心功能描述 - 分板块
     private static final String[][] MODULE_SECTIONS = {
-            // 核心拦截
-            {
-                    "🔒 核心拦截功能",
-                    "✅ 基础拦截 - 挡住约92%应用查询安装状态",
-                    "✅ 文件保护 - 不让应用读取系统安装列表",
-                    "✅ 反射防御 - 监控隐藏的应用检测方法",
-                    "✅ 网络伪装 - 拦截在线应用检测请求",
-                    "✅ 数据伪造 - 生成虚假的应用信息"
-            },
-            // 包管理
-            {
-                    "📦 应用包管理",
-                    "📦 安装查询 - 假装应用已安装/未安装",
-                    "📦 应用列表 - 伪造已安装应用列表",
-                    "📦 系统包过滤 - 不干扰系统应用\n避免系统出错请勿作用系统应用"
-            },
-            // 退出控制
-            {
-                    "🛑 退出拦截功能",
-                    "🛑 退出拦截 - 阻止应用直接退出常用方式",
-                    "🛑 间接拦截 - 监控各种主流页面退出方式",
-                    "🛑 按钮拦截 - 挡住少部分点击退出结束按钮",
-                    "🛑 弹窗拦截 - 标准弹窗可以移除不可取消状态"
-            },
-            // 文件系统
-            {
-                    "📁 数据伪造功能",
-                    "📁 目录伪装 - 假装存在应用目录",
-                    "📁 文件检测 - 伪造应用文件存在",
-                    "📁 命令行拦截 - 拦截伪造检测命令",
-                    "📁 明细伪装 - 虚假生成安装时间/来源"
-            },
-            // 启动相关
-            {
-                    "🚀 启动相关功能",
-                    "🚀 状态伪装 - 假装应用已启用(伪造包)",
-                    "🚀 启动拦截 - 控制应用间跳转(伪造包)",
-                    "🚀 意图伪装 - 伪造应用启动能力(伪造包)",
-                    "🚀 组件伪造 - 假装应用可被调用(伪造包)",
-                    "🚀 插件拦截 - 挡住安装检测插件(伪造包)"
-            },
-            // 悬浮窗
-            {
-                    "🪟 悬浮窗功能",
-                    "🪟 状态显示 - 悬浮窗显示当前模式",
-                    "🪟 实时切换 - 点击切换安装状态",
-                    "🪟 拦截开关 - 控制退出拦截功能",
-                    "🪟 位置记忆 - 记住悬浮窗拖动位置",
-                    "🪟 悬浮窗控制 - 长按隐藏本次显示",
-                    "🪟 自定义包名 - 双击悬浮窗可配置",
-            },
-            // 配置管理
-            {
-                    "⚙️ 配置持久化",
-                    "⚙️ 智能学习 - 记住用户的选择",
-                    "⚙️ 独立配置 - 每个应用单独设置",
-                    "⚙️ 自动保存 - 配置自动存储持久化",
-                    "⚙️ 包名捕获 - 独立自动记忆应用包名"
-            },
-            // 关于模块
-            {
-                    "💬 关于模块",
-                    "💡 开发思路 - 永恒之蓝(小淋)",
-                    "📱 使用方法 - 支持LSPosed、LSPatch",
-                    "⚠️ 拦截效果 - 能挡住大部分安装检测(约92%)",
-                    "🚫 开发声明 - 仅限学习测试，禁止商用及付费！"
-            }
+        // 核心拦截
+        {
+            "🔒 核心拦截功能",
+            "✅ 基础拦截 - 挡住约92%应用查询安装状态",
+            "✅ 文件保护 - 不让应用读取系统安装列表",
+            "✅ 反射防御 - 监控隐藏的应用检测方法",
+            "✅ 网络伪装 - 拦截在线应用检测请求",
+            "✅ 数据伪造 - 生成虚假的应用信息"
+        },
+        // 包管理
+        {
+            "📦 应用包管理",
+            "📦 安装查询 - 假装应用已安装/未安装",
+            "📦 应用列表 - 伪造已安装应用列表",
+            "📦 系统包过滤 - 不干扰系统应用\n避免系统出错请勿作用系统应用"
+        },
+        // 退出控制
+        {
+            "🛑 退出拦截功能",
+            "🛑 退出拦截 - 阻止应用直接退出常用方式",
+            "🛑 间接拦截 - 监控各种主流页面退出方式",
+            "🛑 按钮拦截 - 挡住少部分点击退出结束按钮",
+            "🛑 弹窗拦截 - 标准弹窗可以移除不可取消状态"
+        },
+        // 文件系统
+        {
+            "📁 数据伪造功能",
+            "📁 目录伪装 - 假装存在应用目录",
+            "📁 文件检测 - 伪造应用文件存在",
+            "📁 命令行拦截 - 拦截伪造检测命令",
+            "📁 明细伪装 - 虚假生成安装时间/来源"
+        },
+        // 启动相关
+        {
+            "🚀 启动相关功能",
+            "🚀 状态伪装 - 假装应用已启用(伪造包)",
+            "🚀 启动拦截 - 控制应用间跳转(伪造包)",
+            "🚀 意图伪装 - 伪造应用启动能力(伪造包)",
+            "🚀 组件伪造 - 假装应用可被调用(伪造包)",
+            "🚀 插件拦截 - 挡住安装检测插件(伪造包)"
+        },
+        // 悬浮窗
+        {
+            "🪟 悬浮窗功能",
+            "🪟 状态显示 - 悬浮窗显示当前模式",
+            "🪟 实时切换 - 点击切换安装状态",
+            "🪟 拦截开关 - 控制退出拦截功能",
+            "🪟 位置记忆 - 记住悬浮窗拖动位置",
+            "🪟 悬浮窗控制 - 长按隐藏本次显示",
+            "🪟 自定义包名 - 双击悬浮窗可配置",
+        },
+        // 配置管理
+        {
+            "⚙️ 配置持久化",
+            "⚙️ 智能学习 - 记住用户的选择",
+            "⚙️ 独立配置 - 每个应用单独设置",
+            "⚙️ 自动保存 - 配置自动存储持久化",
+            "⚙️ 包名捕获 - 独立自动记忆应用包名"
+        },
+        // 关于模块
+        {
+            "💬 关于模块",
+            "💡 开发思路 - 永恒之蓝(小淋)",
+            "📱 使用方法 - 支持LSPosed、LSPatch",
+            "⚠️ 拦截效果 - 能挡住大部分安装检测(约92%)",
+            "🚫 开发声明 - 仅限学习测试，禁止商用及付费！"
+        }
     };
 
     private LinearLayout rootLayout;
@@ -147,11 +151,14 @@ public class MainActivity extends Activity {
         setTopPaddingColor(topPaddingColor);
         addScrollListener();
         handler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                animateInitialSections();
-            }
-        }, 300);
+                @Override
+                public void run() {
+                    animateInitialSections();
+                }
+            }, 300);
+
+        // 自动检查 GitHub 新版本（可选，若不需要可删除此行）
+        Update.checkForUpdate(this);
     }
 
     /** 创建主布局 */
@@ -180,9 +187,9 @@ public class MainActivity extends Activity {
         View topStatusView = new View(this);
         topStatusView.setBackgroundColor(color);
         topStatusView.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp2px(12)
-        ));
+                                          LinearLayout.LayoutParams.MATCH_PARENT,
+                                          dp2px(12)
+                                      ));
         rootLayout.addView(topStatusView, 0);
     }
 
@@ -216,8 +223,8 @@ public class MainActivity extends Activity {
         titleContainer.addView(subtitleView);
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
         );
         params.bottomMargin = dp2px(20);
         rootLayout.addView(titleContainer, params);
@@ -237,14 +244,14 @@ public class MainActivity extends Activity {
         // 左侧状态卡片
         LinearLayout statusCard = createStatusCard();
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         statusParams.rightMargin = dp2px(8);
         statusRow.addView(statusCard, statusParams);
 
         // 右侧图标控制卡片
         LinearLayout iconControlCard = createIconControlCard();
         LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         iconParams.leftMargin = dp2px(8);
         statusRow.addView(iconControlCard, iconParams);
 
@@ -279,7 +286,7 @@ public class MainActivity extends Activity {
         statusIcon.setTextSize(32);
         statusIcon.setGravity(Gravity.CENTER);
         statusContainer.addView(statusIcon);
-        
+
         //配置激活文本内容
         statusView = new TextView(this);
         statusView.setText(isActivated ? "模块已激活" : "模块未激活");
@@ -288,41 +295,41 @@ public class MainActivity extends Activity {
         statusView.setGravity(Gravity.CENTER);
         statusView.setTypeface(null, android.graphics.Typeface.BOLD);
         statusContainer.addView(statusView);
-        
-         
+
+
 
         // 点击事件
         statusContainer.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(final View v) {
-                refreshActivationStatus();
-                v.animate().scaleX(0.75f).scaleY(0.75f).setDuration(150)
+                @Override
+                public void onClick(final View v) {
+                    refreshActivationStatus();
+                    v.animate().scaleX(0.75f).scaleY(0.75f).setDuration(150)
                         .withEndAction(new Runnable() {
                             @Override
                             public void run() {
                                 v.animate().scaleX(1f).scaleY(1f).setDuration(100).start();
                             }
                         });
-                showStatusDetailDialog();
-            }
-        });
+                    showStatusDetailDialog();
+                }
+            });
 
         // 激活卡片触摸反馈
         statusContainer.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                switch (event.getAction()) {
-                    case MotionEvent.ACTION_DOWN:
-                        v.setAlpha(0.7f);
-                        break;
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        v.setAlpha(1f);
-                        break;
+                @Override
+                public boolean onTouch(View v, MotionEvent event) {
+                    switch (event.getAction()) {
+                        case MotionEvent.ACTION_DOWN:
+                            v.setAlpha(0.7f);
+                            break;
+                        case MotionEvent.ACTION_UP:
+                        case MotionEvent.ACTION_CANCEL:
+                            v.setAlpha(1f);
+                            break;
+                    }
+                    return false;
                 }
-                return false;
-            }
-        });
+            });
 
         return statusContainer;
     }
@@ -363,35 +370,35 @@ public class MainActivity extends Activity {
 
         // 图标设置：弹出图标控制对话框
         controlContainer.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(final View v) {
-                v.animate().scaleX(0.75f).scaleY(0.75f).setDuration(150)
+                @Override
+                public void onClick(final View v) {
+                    v.animate().scaleX(0.75f).scaleY(0.75f).setDuration(150)
                         .withEndAction(new Runnable() {
                             @Override
                             public void run() {
                                 v.animate().scaleX(1f).scaleY(1f).setDuration(100).start();
                             }
                         });
-                showIconControlDialog(iconView, textView);
-            }
-        });
+                    showIconControlDialog(iconView, textView);
+                }
+            });
 
         // 图标卡片触摸反馈
         controlContainer.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                switch (event.getAction()) {
-                    case MotionEvent.ACTION_DOWN:
-                        v.setAlpha(0.7f);
-                        break;
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        v.setAlpha(1f);
-                        break;
+                @Override
+                public boolean onTouch(View v, MotionEvent event) {
+                    switch (event.getAction()) {
+                        case MotionEvent.ACTION_DOWN:
+                            v.setAlpha(0.7f);
+                            break;
+                        case MotionEvent.ACTION_UP:
+                        case MotionEvent.ACTION_CANCEL:
+                            v.setAlpha(1f);
+                            break;
+                    }
+                    return false;
                 }
-                return false;
-            }
-        });
+            });
 
         return controlContainer;
     }
@@ -404,7 +411,7 @@ public class MainActivity extends Activity {
         ComponentName aliasName = new ComponentName(this, "com.install.appinstall.xl.MainHome");
         int state = pm.getComponentEnabledSetting(aliasName);
         return state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-                || state == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
+            || state == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
     }
 
     /** 控制桌面图标显示/隐藏（使用 DONT_KILL_APP 防止应用退出） */
@@ -412,7 +419,7 @@ public class MainActivity extends Activity {
         PackageManager pm = getPackageManager();
         ComponentName aliasName = new ComponentName(this, "com.install.appinstall.xl.MainHome");
         int newState = show ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-                : PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+            : PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
         pm.setComponentEnabledSetting(aliasName, newState, PackageManager.DONT_KILL_APP);
     }
 
@@ -423,41 +430,41 @@ public class MainActivity extends Activity {
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_LIGHT);
         builder.setTitle("桌面图标显示控制")
-                .setSingleChoiceItems(options, checkedItem, new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        boolean show = (which == 0);
+            .setSingleChoiceItems(options, checkedItem, new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    boolean show = (which == 0);
 
-                        // 1. 设置图标状态（应用不会退出）
-                        setLauncherIconVisibility(show);
+                    // 1. 设置图标状态（应用不会退出）
+                    setLauncherIconVisibility(show);
 
-                        // 2. 更新UI
-                        iconView.setText(show ? "👁️" : "👁️‍🗨️");
-                        textView.setText(show ? "桌面图标:显示中" : "桌面图标:隐藏中");
-                        textView.setTextColor(show ? ACTIVATED_COLOR : DEACTIVATED_COLOR);
+                    // 2. 更新UI
+                    iconView.setText(show ? "👁️" : "👁️‍🗨️");
+                    textView.setText(show ? "桌面图标:显示中" : "桌面图标:隐藏中");
+                    textView.setTextColor(show ? ACTIVATED_COLOR : DEACTIVATED_COLOR);
 
-                        // 3. 尝试刷新桌面图标（广播方式）
-                        tryRefreshLauncher();
+                    // 3. 尝试刷新桌面图标（广播方式）
+                    tryRefreshLauncher();
 
-                        // 4. 提示用户操作已执行
-                        String msg = show ? "✅ 图标已显示" : "✅ 图标已隐藏\n需重启设备/桌面";
-                        Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show();
+                    // 4. 提示用户操作已执行
+                    String msg = show ? "✅ 图标已显示" : "✅ 图标已隐藏\n需重启设备/桌面";
+                    ToastUtil.show(MainActivity.this, msg);
 
-                        // 5. 如果是隐藏，延迟检查并引导用户
-                        if (!show) {
-                            new Handler().postDelayed(new Runnable() {
+                    // 5. 如果是隐藏，延迟检查并引导用户
+                    if (!show) {
+                        new Handler().postDelayed(new Runnable() {
                                 @Override
                                 public void run() {
                                     checkIconHiddenAndGuide();
                                 }
                             }, 10);
-                        }
-
-                        dialog.dismiss();
                     }
-                })
-                .setNegativeButton("取消", null)
-                .show();
+
+                    dialog.dismiss();
+                }
+            })
+            .setNegativeButton("取消", null)
+            .show();
     }
 
     /** 尝试刷新桌面图标（兼容所有 Android 版本，无复杂 Extra） */
@@ -484,13 +491,15 @@ public class MainActivity extends Activity {
         if (isHidden) {
             // 组件已禁用，但桌面图标可能未消失
             new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_LIGHT)
-                    .setTitle("提示")
-                    .setMessage("图标已隐藏，但桌面可能未及时刷新，您可以：\n1• 返回桌面等待几秒\n2• 重启桌面\n3• 重启手机\n\n使用LSPosed重新进入主页")
-                    .setPositiveButton("知道了", null)
-                    .show();
+                .setTitle("提示")
+                .setMessage("图标已隐藏，但桌面可能未及时刷新，您可以：\n1• 返回桌面等待几秒\n2• 重启桌面\n3• 重启手机\n\n使用LSPosed重新进入主页")
+                .setPositiveButton("知道了", null)
+                .show();
+            // ToastUtil.show(this, "若未生效请重启设备");
         } else {
             // 极少发生，提示重试
-            Toast.makeText(this, "图标状态设置失败，请重试", Toast.LENGTH_SHORT).show();
+            ToastUtil.show(this, "图标状态设置失败，请重试");
+
         }
     }
 
@@ -529,8 +538,8 @@ public class MainActivity extends Activity {
                 View divider = new View(this);
                 divider.setBackgroundColor(0xFFF5F5F5);
                 LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp2px(1)
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp2px(1)
                 );
                 dividerParams.topMargin = dp2px(8);
                 dividerParams.bottomMargin = dp2px(8);
@@ -539,47 +548,47 @@ public class MainActivity extends Activity {
         }
 
         sectionContainer.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(final View v) {
-                v.animate().scaleX(0.78f).scaleY(0.78f).setDuration(150)
+                @Override
+                public void onClick(final View v) {
+                    v.animate().scaleX(0.78f).scaleY(0.78f).setDuration(150)
                         .withEndAction(new Runnable() {
                             @Override
                             public void run() {
                                 v.animate().scaleX(1f).scaleY(1f).setDuration(100).start();
                             }
                         });
-                showSectionDetailDialog(section);
-                final GradientDrawable bg = (GradientDrawable) sectionContainer.getBackground();
-                final int originalColor = DIALOG_BACKGROUND;
-                bg.setColor(0xFFF8F8F8);
-                sectionContainer.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        bg.setColor(originalColor);
-                    }
-                }, 200);
-            }
-        });
+                    showSectionDetailDialog(section);
+                    final GradientDrawable bg = (GradientDrawable) sectionContainer.getBackground();
+                    final int originalColor = DIALOG_BACKGROUND;
+                    bg.setColor(0xFFF8F8F8);
+                    sectionContainer.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                bg.setColor(originalColor);
+                            }
+                        }, 200);
+                }
+            });
 
         sectionContainer.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                switch (event.getAction()) {
-                    case MotionEvent.ACTION_DOWN:
-                        v.setAlpha(0.7f);
-                        break;
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        v.setAlpha(1f);
-                        break;
+                @Override
+                public boolean onTouch(View v, MotionEvent event) {
+                    switch (event.getAction()) {
+                        case MotionEvent.ACTION_DOWN:
+                            v.setAlpha(0.7f);
+                            break;
+                        case MotionEvent.ACTION_UP:
+                        case MotionEvent.ACTION_CANCEL:
+                            v.setAlpha(1f);
+                            break;
+                    }
+                    return false;
                 }
-                return false;
-            }
-        });
+            });
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
         );
         params.bottomMargin = dp2px(16);
         rootLayout.addView(sectionContainer, params);
@@ -624,49 +633,49 @@ public class MainActivity extends Activity {
     private void showStatusDetailDialog() {
         boolean isActivated = isModuleActivated();
         String message = isActivated ?
-                "模块当前运行状态：已激活\n" +
-                        "✅ 所有Hook功能已生效\n" +
-                        "✅ 可以在Xposed框架中查看\n" +
-                        "✅ 应用启动时自动加载\n\n" +
-                        "如果状态显示异常，请：\n" +
-                        "1. 重启手机\n" +
-                        "2. 检查Xposed/LSPosed激活状态\n" +
-                        "(若使用LSPatch内嵌/本地模式无需激活)\n" +
-                        "3. 重新启用模块" :
-                "模块当前运行状态：未激活\n" +
-                        "❌ Hook功能无法生效\n" +
-                        "❌ 需要激活Xposed模块\n\n" +
-                        "请按以下步骤操作：\n" +
-                        "1. 打开Xposed/LSPosed应用\n" +
-                        "2. 找到并启用本模块\n" +
-                        "3. 重启目标应用或手机\n" +
-                        "(若使用LSPatch内嵌/本地模式无需激活)\n" +
-                        "4. 返回此处检查状态";
+            "模块当前运行状态：已激活\n" +
+            "✅ 所有Hook功能已生效\n" +
+            "✅ 可以在Xposed框架中查看\n" +
+            "✅ 应用启动时自动加载\n\n" +
+            "如果状态显示异常，请：\n" +
+            "1. 重启手机\n" +
+            "2. 检查Xposed/LSPosed激活状态\n" +
+            "(若使用LSPatch内嵌/本地模式无需激活)\n" +
+            "3. 重新启用模块" :
+            "模块当前运行状态：未激活\n" +
+            "❌ Hook功能无法生效\n" +
+            "❌ 需要激活Xposed模块\n\n" +
+            "请按以下步骤操作：\n" +
+            "1. 打开Xposed/LSPosed应用\n" +
+            "2. 找到并启用本模块\n" +
+            "3. 重启目标应用或手机\n" +
+            "(若使用LSPatch内嵌/本地模式无需激活)\n" +
+            "4. 返回此处检查状态";
 
         final AlertDialog dialog = new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_LIGHT)
-                .setTitle("模块状态详情")
-                .setMessage(message)
-                .setPositiveButton("确定", null)
-                .create();
+            .setTitle("模块状态详情")
+            .setMessage(message)
+            .setPositiveButton("确定", null)
+            .create();
 
         dialog.setOnShowListener(new DialogInterface.OnShowListener() {
-            @Override
-            public void onShow(DialogInterface dialogInterface) {
-                try {
-                    Window window = dialog.getWindow();
-                    if (window != null) {
-                        WindowManager.LayoutParams params = window.getAttributes();
-                        params.width = WindowManager.LayoutParams.MATCH_PARENT;
-                        params.height = WindowManager.LayoutParams.WRAP_CONTENT;
-                        params.gravity = Gravity.CENTER;
-                        params.horizontalMargin = 0.05f;
-                        window.setAttributes(params);
+                @Override
+                public void onShow(DialogInterface dialogInterface) {
+                    try {
+                        Window window = dialog.getWindow();
+                        if (window != null) {
+                            WindowManager.LayoutParams params = window.getAttributes();
+                            params.width = WindowManager.LayoutParams.MATCH_PARENT;
+                            params.height = WindowManager.LayoutParams.WRAP_CONTENT;
+                            params.gravity = Gravity.CENTER;
+                            params.horizontalMargin = 0.05f;
+                            window.setAttributes(params);
+                        }
+                    } catch (Exception e) {
+                        // ignore
                     }
-                } catch (Exception e) {
-                    // ignore
                 }
-            }
-        });
+            });
         dialog.show();
     }
 
@@ -700,51 +709,51 @@ public class MainActivity extends Activity {
         }
 
         final AlertDialog dialog = new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_LIGHT)
-                .setTitle(title)
-                .setMessage(message.toString())
-                .setPositiveButton("确定", null)
-                .create();
+            .setTitle(title)
+            .setMessage(message.toString())
+            .setPositiveButton("确定", null)
+            .create();
 
         dialog.setOnShowListener(new DialogInterface.OnShowListener() {
-            @Override
-            public void onShow(DialogInterface dialogInterface) {
-                try {
-                    Window window = dialog.getWindow();
-                    if (window != null) {
-                        WindowManager.LayoutParams params = window.getAttributes();
-                        params.width = WindowManager.LayoutParams.MATCH_PARENT;
-                        params.height = WindowManager.LayoutParams.WRAP_CONTENT;
-                        params.gravity = Gravity.CENTER;
-                        params.horizontalMargin = 0.05f;
-                        window.setAttributes(params);
+                @Override
+                public void onShow(DialogInterface dialogInterface) {
+                    try {
+                        Window window = dialog.getWindow();
+                        if (window != null) {
+                            WindowManager.LayoutParams params = window.getAttributes();
+                            params.width = WindowManager.LayoutParams.MATCH_PARENT;
+                            params.height = WindowManager.LayoutParams.WRAP_CONTENT;
+                            params.gravity = Gravity.CENTER;
+                            params.horizontalMargin = 0.05f;
+                            window.setAttributes(params);
+                        }
+                    } catch (Exception e) {
+                        // ignore
                     }
-                } catch (Exception e) {
-                    // ignore
                 }
-            }
-        });
+            });
         dialog.show();
     }
 
     /** 添加滚动监听 */
     private void addScrollListener() {
         scrollView.getViewTreeObserver().addOnScrollChangedListener(new ViewTreeObserver.OnScrollChangedListener() {
-            @Override
-            public void onScrollChanged() {
-                if (isScrolling) return;
-                isScrolling = true;
-                final int currentScrollY = scrollView.getScrollY();
-                final boolean scrollingDown = currentScrollY > lastScrollY;
-                updateSectionAnimations(currentScrollY, scrollingDown);
-                lastScrollY = currentScrollY;
-                scrollView.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        isScrolling = false;
-                    }
-                }, 16);
-            }
-        });
+                @Override
+                public void onScrollChanged() {
+                    if (isScrolling) return;
+                    isScrolling = true;
+                    final int currentScrollY = scrollView.getScrollY();
+                    final boolean scrollingDown = currentScrollY > lastScrollY;
+                    updateSectionAnimations(currentScrollY, scrollingDown);
+                    lastScrollY = currentScrollY;
+                    scrollView.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                isScrolling = false;
+                            }
+                        }, 16);
+                }
+            });
     }
 
     /** 更新板块动画状态 */
@@ -773,10 +782,10 @@ public class MainActivity extends Activity {
             final float currentTranslationY = section.getTranslationY();
             final float newTranslationY = currentTranslationY * 0.7f + targetTranslationY * 0.3f;
             section.animate()
-                    .translationY(newTranslationY)
-                    .setDuration(1000)
-                    .setInterpolator(new AccelerateDecelerateInterpolator())
-                    .start();
+                .translationY(newTranslationY)
+                .setDuration(1000)
+                .setInterpolator(new AccelerateDecelerateInterpolator())
+                .start();
         }
     }
 
@@ -786,11 +795,11 @@ public class MainActivity extends Activity {
             final View section = sectionViews.get(i);
             final int delay = i * 80;
             handler.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    animateSectionIn(section, delay);
-                }
-            }, delay);
+                    @Override
+                    public void run() {
+                        animateSectionIn(section, delay);
+                    }
+                }, delay);
         }
     }
 
@@ -809,38 +818,38 @@ public class MainActivity extends Activity {
         animationSet.addAnimation(slideUp);
 
         animationSet.setAnimationListener(new Animation.AnimationListener() {
-            @Override
-            public void onAnimationStart(Animation animation) {}
+                @Override
+                public void onAnimationStart(Animation animation) {}
 
-            @Override
-            public void onAnimationEnd(Animation animation) {
-                view.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        view.animate()
-                                .translationY(dp2px(-15))
-                                .setDuration(250)
-                                .withEndAction(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        view.animate().translationY(0).setDuration(600).start();
-                                    }
-                                })
-                                .start();
-                    }
-                }, 100);
-            }
+                @Override
+                public void onAnimationEnd(Animation animation) {
+                    view.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                view.animate()
+                                    .translationY(dp2px(-15))
+                                    .setDuration(250)
+                                    .withEndAction(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            view.animate().translationY(0).setDuration(600).start();
+                                        }
+                                    })
+                                    .start();
+                            }
+                        }, 100);
+                }
 
-            @Override
-            public void onAnimationRepeat(Animation animation) {}
-        });
+                @Override
+                public void onAnimationRepeat(Animation animation) {}
+            });
 
         view.startAnimation(animationSet);
         view.setAlpha(1f);
         view.setTranslationY(0);
     }
 
-   /** 刷新激活状态 */
+    /** 刷新激活状态 */
     private void refreshActivationStatus() {
         boolean isActivated = isModuleActivated();
         statusView.setText(isActivated ? "模块已激活" : "模块未激活");
@@ -883,24 +892,48 @@ public class MainActivity extends Activity {
         bottomContainer.setBackground(bottomBg);
         bottomContainer.setPadding(dp2px(20), dp2px(16), dp2px(20), dp2px(16));
 
+        // 版本信息（从 PackageManager 动态获取）
+        String versionText = "伪造安装模块版本: 获取失败";
+        try {
+            PackageInfo pkgInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
+            versionText = "伪造安装模块版本: " + pkgInfo.versionName + " (" + pkgInfo.versionCode + ")";
+        } catch (PackageManager.NameNotFoundException e) {
+            e.printStackTrace();
+        }
+
+        // 版权信息
+        String copyrightText = "© 2026 永恒之蓝(小淋)";
+
+        // 将版本和版权放在一行
+        LinearLayout versionCopyrightRow = new LinearLayout(this);
+        versionCopyrightRow.setOrientation(LinearLayout.HORIZONTAL);
+        versionCopyrightRow.setGravity(Gravity.CENTER_VERTICAL);
+
         TextView versionView = new TextView(this);
-        versionView.setText("版本: 2.0.73_143 (Build 2026.03.01)");
+        versionView.setText(versionText);
         versionView.setTextSize(12);
         versionView.setTextColor(DIALOG_TEXT_COLOR);
-        versionView.setGravity(Gravity.CENTER);
+        versionView.setGravity(Gravity.START);
+        versionView.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
         TextView copyrightView = new TextView(this);
-        copyrightView.setText("© 2026 永恒之蓝(小淋)");
+        copyrightView.setText(copyrightText);
         copyrightView.setTextSize(12);
         copyrightView.setTextColor(0xFF888888);
-        copyrightView.setGravity(Gravity.CENTER);
-        copyrightView.setPadding(0, dp2px(4), 0, dp2px(12));
+        copyrightView.setGravity(Gravity.END);
+        copyrightView.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        versionCopyrightRow.addView(versionView);
+        versionCopyrightRow.addView(copyrightView);
+        bottomContainer.addView(versionCopyrightRow);
+
+        // 链接行（三个链接水平排列，间距缩小）
         LinearLayout linkLayout = new LinearLayout(this);
         linkLayout.setOrientation(LinearLayout.HORIZONTAL);
         linkLayout.setGravity(Gravity.CENTER);
-        final int linkMargin = dp2px(50);
+        int linkMargin = dp2px(10); // 缩小间距
 
+        // 作者主页(GitHub)
         TextView homeView = new TextView(this);
         homeView.setText("🔗 作者主页(GitHub)");
         homeView.setTextSize(12);
@@ -908,44 +941,79 @@ public class MainActivity extends Activity {
         homeView.setGravity(Gravity.CENTER);
         homeView.setPadding(0, 0, linkMargin, 0);
         homeView.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/yijun01/com.install.appinstall.xl"));
-                startActivity(intent);
-            }
-        });
+                @Override
+                public void onClick(View v) {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/yijun01/com.install.appinstall.xl"));
+                    startActivity(intent);
+                    ToastUtil.show(MainActivity.this, "前往作者主页");
+                }
+            });
 
+        // 作者主页(MT论坛)
+        TextView mtView = new TextView(this);
+        mtView.setText("🔗 作者主页(MT论坛)");
+        mtView.setTextSize(12);
+        mtView.setTextColor(LINK_COLOR);
+        mtView.setGravity(Gravity.CENTER);
+        mtView.setPadding(linkMargin, 0, 0, 0);
+        mtView.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://bbs.binmt.cc/home.php?mod=space&uid=30974&do=profile"));
+                    startActivity(intent);
+                    ToastUtil.show(MainActivity.this, "前往MT论坛");
+                }
+            });
+
+        // 官方仓库(GitHub)
         TextView repoView = new TextView(this);
         repoView.setText("📦 官方仓库(GitHub)");
         repoView.setTextSize(12);
         repoView.setTextColor(LINK_COLOR);
         repoView.setGravity(Gravity.CENTER);
+        repoView.setPadding(linkMargin, 0, linkMargin, 0);
         repoView.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Xposed-Modules-Repo/com.install.appinstall.xl"));
-                startActivity(intent);
-            }
-        });
+                @Override
+                public void onClick(View v) {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Xposed-Modules-Repo/com.install.appinstall.xl"));
+                    startActivity(intent);
+                    ToastUtil.show(MainActivity.this, "前往模块仓库");
+                }
+            });
+
 
         linkLayout.addView(homeView);
+        linkLayout.addView(mtView);
         linkLayout.addView(repoView);
+        bottomContainer.addView(linkLayout);
 
+        // 检查更新按钮
+        TextView checkUpdateBtn = new TextView(this);
+        checkUpdateBtn.setText("🔍 检查更新");
+        checkUpdateBtn.setTextSize(14);
+        checkUpdateBtn.setTextColor(LINK_COLOR);
+        checkUpdateBtn.setGravity(Gravity.CENTER);
+        checkUpdateBtn.setPadding(0, dp2px(12), 0, dp2px(8));
+        checkUpdateBtn.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    Update.checkForUpdate(MainActivity.this);
+                }
+            });
+        bottomContainer.addView(checkUpdateBtn);
+
+        // 免责声明
         TextView disclaimerView = new TextView(this);
         disclaimerView.setText("仅供个人学习测试，禁商用禁引流以及禁付费盈利");
         disclaimerView.setTextSize(11);
         disclaimerView.setTextColor(0xFFAAAAAA);
         disclaimerView.setGravity(Gravity.CENTER);
         disclaimerView.setPadding(0, dp2px(8), 0, 0);
-
-        bottomContainer.addView(versionView);
-        bottomContainer.addView(copyrightView);
-        bottomContainer.addView(linkLayout);
         bottomContainer.addView(disclaimerView);
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
         );
         params.topMargin = dp2px(8);
         rootLayout.addView(bottomContainer, params);
