@@ -1112,11 +1112,11 @@ public class HookInit implements IXposedHookLoadPackage {
                 fos.close();
                 saveSuccess = true;
                 savedPath = filePath;
-        Boolean loadedShow = floatingShownMap.get(currentTargetApp);
-        if (loadedShow != null && !loadedShow) {
-          //  log("⚠️ 检测到异常的隐藏状态，强制设为显示");
-            floatingShownMap.put(currentTargetApp, true);
-        }
+                Boolean loadedShow = floatingShownMap.get(currentTargetApp);
+                if (loadedShow != null && !loadedShow) {
+                    //  log("⚠️ 检测到异常的隐藏状态，强制设为显示");
+                    floatingShownMap.put(currentTargetApp, true);
+                }
                 //   log("✅ 配置保存成功: " + filePath);
                 break; // 保存成功，不再尝试其他路径
             } catch (Throwable t) {
@@ -1787,81 +1787,79 @@ public class HookInit implements IXposedHookLoadPackage {
         }
     }
 
-
-
-
     // ========== 悬浮窗功能 ==========
-   private void hookActivityLifecycle(ClassLoader classLoader) {
-    try {
-        // 1. onCreate Hook（首次进入）
-        XposedHelpers.findAndHookMethod(
-                "android.app.Activity",
-                classLoader,
-                "onCreate",
-                Bundle.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        try {
-                            final Activity activity = (Activity) param.thisObject;
-                            
-                            new Handler(Looper.getMainLooper()).postDelayed(
-                                    new Runnable() {
-                                        @Override
-                                        public void run() {
-                                            try {
-                                                // 每次创建新页面时检查
-                                                Boolean shouldShow = floatingShownMap.get(currentTargetApp);
-                                                if (shouldShow == null || shouldShow) {
-                                                    showFloatingView(activity);
-                                                }
-                                            } catch (Throwable t) {
-                                                log("显示悬浮窗异常: " + t.getMessage());
-                                            }
-                                        }
-                                    },
-                                    850
-                            );
-                        } catch (Throwable t) {
-                            log("Activity onCreate Hook异常: " + t.getMessage());
-                        }
-                    }
-                }
-        );
+    private void hookActivityLifecycle(ClassLoader classLoader) {
+        try {
+            // 1. onCreate Hook（首次进入）
+            XposedHelpers.findAndHookMethod(
+                    "android.app.Activity",
+                    classLoader,
+                    "onCreate",
+                    Bundle.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                final Activity activity = (Activity) param.thisObject;
 
-        // 2. 🟢 onResume Hook（处理返回页面）- 即使应用没写，也能Hook到
-        XposedHelpers.findAndHookMethod(
-                "android.app.Activity",
-                classLoader,
-                "onResume",
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        try {
-                            Activity activity = (Activity) param.thisObject;
-                            currentResumedActivity = activity;
-                            
-                            // 检查隐藏状态
-                            Boolean shouldShow = floatingShownMap.get(currentTargetApp);
-                            
-                            if (shouldShow != null && !shouldShow) {
-                                // 隐藏状态：移除悬浮窗
-                                ViewGroup decorView = (ViewGroup) activity.getWindow().getDecorView();
-                                View floatingView = decorView.findViewWithTag("install_fake_floating");
-                                if (floatingView != null) {
-                                    decorView.removeView(floatingView);
-                                 //   log("onResume移除悬浮窗: " + activity.getClass().getSimpleName());
-                                }
+                                new Handler(Looper.getMainLooper()).postDelayed(
+                                                new Runnable() {
+                                                    @Override
+                                                    public void run() {
+                                                        try {
+                                                            // 每次创建新页面时检查
+                                                            Boolean shouldShow = floatingShownMap.get(currentTargetApp);
+                                                            if (shouldShow == null || shouldShow) {
+                                                                showFloatingView(activity);
+                                                            }
+                                                        } catch (Throwable t) {
+                                                            log("显示悬浮窗异常: " + t.getMessage());
+                                                        }
+                                                    }
+                                                },
+                                                850
+                                        );
+                            } catch (Throwable t) {
+                                log("Activity onCreate Hook异常: " + t.getMessage());
                             }
-                            // 注意：不在这里创建悬浮窗，避免重复创建
-                            
-                        } catch (Throwable t) {
-                            log("onResume异常: " + t.getMessage());
                         }
                     }
-                }
-        );
-        
+            );
+
+            // 2. 🟢 onResume Hook（处理返回页面）- 即使应用没写，也能Hook到
+            XposedHelpers.findAndHookMethod(
+                    "android.app.Activity",
+                    classLoader,
+                    "onResume",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                Activity activity = (Activity) param.thisObject;
+                                currentResumedActivity = activity;
+
+                                // 检查隐藏状态
+                                Boolean shouldShow = floatingShownMap.get(currentTargetApp);
+
+                                if (shouldShow != null && !shouldShow) {
+                                    // 隐藏状态：移除悬浮窗
+                                    ViewGroup decorView = (ViewGroup) activity.getWindow().getDecorView();
+                                    View floatingView = decorView.findViewWithTag("install_fake_floating");
+                                    if (floatingView != null) {
+                                        decorView.removeView(floatingView);
+                                        //   log("onResume移除悬浮窗: " +
+                                        // activity.getClass().getSimpleName());
+                                    }
+                                }
+                                // 注意：不在这里创建悬浮窗，避免重复创建
+
+                            } catch (Throwable t) {
+                                log("onResume异常: " + t.getMessage());
+                            }
+                        }
+                    }
+            );
+
             XposedHelpers.findAndHookMethod(
                     "android.app.Activity",
                     classLoader,
@@ -1907,37 +1905,36 @@ public class HookInit implements IXposedHookLoadPackage {
         }
         return null;
     }
-    
-    
+
     // 完整的 showFloatingView 方法
     private void showFloatingView(final Activity activity) {
-    try {
-        // ✅ 1. 检查隐藏状态
-        Boolean shouldShow = floatingShownMap.get(currentTargetApp);
-        if (shouldShow == null) {
-            shouldShow = true;
-            floatingShownMap.put(currentTargetApp, true);
-        }
-        
-        // ✅ 2. 隐藏状态直接返回（并移除残留）
-        if (!shouldShow) {
-            ViewGroup decorView = (ViewGroup) activity.getWindow().getDecorView();
-            View existingView = decorView.findViewWithTag("install_fake_floating");
-            if (existingView != null) {
-                decorView.removeView(existingView);
+        try {
+            // ✅ 1. 检查隐藏状态
+            Boolean shouldShow = floatingShownMap.get(currentTargetApp);
+            if (shouldShow == null) {
+                shouldShow = true;
+                floatingShownMap.put(currentTargetApp, true);
             }
-            return;  // 关键：不创建新悬浮窗
-        }
-        
-        // ✅ 3. 已有悬浮窗不重复创建
-        View existingView = activity
-                .getWindow()
-                .getDecorView()
-                .findViewWithTag("install_fake_floating");
-        if (existingView != null) {
-            return;
-        }
-        
+
+            // ✅ 2. 隐藏状态直接返回（并移除残留）
+            if (!shouldShow) {
+                ViewGroup decorView = (ViewGroup) activity.getWindow().getDecorView();
+                View existingView = decorView.findViewWithTag("install_fake_floating");
+                if (existingView != null) {
+                    decorView.removeView(existingView);
+                }
+                return; // 关键：不创建新悬浮窗
+            }
+
+            // ✅ 3. 已有悬浮窗不重复创建
+            View existingView = activity
+                    .getWindow()
+                    .getDecorView()
+                    .findViewWithTag("install_fake_floating");
+            if (existingView != null) {
+                return;
+            }
+
             activity.runOnUiThread(
                     new Runnable() {
                         @Override
@@ -2266,8 +2263,8 @@ public class HookInit implements IXposedHookLoadPackage {
 
             // ========== Spinner优化（保持原有逻辑不变） ==========
             final Spinner typeSpinner = new Spinner(activity);
-            typeSpinner.setWillNotDraw(false); 
-            typeSpinner.setPopupBackgroundResource(android.R.color.transparent); 
+            typeSpinner.setWillNotDraw(false);
+            typeSpinner.setPopupBackgroundResource(android.R.color.transparent);
             List<String> spinnerItems = new ArrayList<>();
             spinnerItems.add("◀ 添加伪造");
             spinnerItems.add("◀ 排除伪造");
@@ -2281,7 +2278,7 @@ public class HookInit implements IXposedHookLoadPackage {
                     tv.setTextSize(14);
                     tv.setGravity(Gravity.CENTER);
                     tv.setPadding(40, 20, 40, 20);
-                    tv.setBackgroundColor(0xFFF5F5F5); 
+                    tv.setBackgroundColor(0xFFF5F5F5);
                     tv.setBackgroundResource(android.R.drawable.list_selector_background); // 保留点击高亮
                     return view;
                 }
@@ -2294,7 +2291,7 @@ public class HookInit implements IXposedHookLoadPackage {
                     tv.setTextSize(18);
                     tv.setGravity(Gravity.CENTER_VERTICAL);
                     tv.setPadding(20, 30, 20, 30);
-                    tv.setBackgroundColor(0xFFF5F5F5); 
+                    tv.setBackgroundColor(0xFFF5F5F5);
                     tv.setBackgroundResource(android.R.drawable.list_selector_background); // 保留点击高亮
                     return view;
                 }
@@ -2411,6 +2408,7 @@ public class HookInit implements IXposedHookLoadPackage {
             tipTv.setPadding(30, 20, 30, 10); // 增大上下内边距
             tipTv.setTextSize(12); // 放大文字
             tipTv.setTextColor(0xFFFF5722); // 橙色，醒目
+            tipTv.setTextIsSelectable(true); // 可复制
             packagesLayout.addView(tipTv);
             packagesLayout.requestLayout(); // 强制刷新
 /*
@@ -2728,6 +2726,7 @@ public class HookInit implements IXposedHookLoadPackage {
             fakeTitle.setPadding(30, 15, 30, 10);
             fakeTitle.setTextSize(13);
             fakeTitle.setTextColor(0xFF4CAF50);
+            fakeTitle.setTextIsSelectable(true); // 可复制
             packagesLayout.addView(fakeTitle);
 
             // 渲染伪造包列表
@@ -2744,13 +2743,14 @@ public class HookInit implements IXposedHookLoadPackage {
                 pkgTv.setText((i + 1) + ". [伪造] " + pkg); // 伪造标签
                 pkgTv.setPadding(0, 5, 0, 5);
                 pkgTv.setTextSize(13);
-                pkgTv.setTextColor(0xFF9E9E9E); 
-                 // 锁定文本颜色，防止主题覆盖
+                pkgTv.setTextColor(0xFF9E9E9E);
+                // 锁定文本颜色，防止主题覆盖
                 pkgTv.setIncludeFontPadding(false);
                 pkgTv.setWillNotDraw(false);
                 pkgTv.setSingleLine(false);
                 pkgTv.setMaxLines(2);
                 pkgTv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                pkgTv.setTextIsSelectable(true); // 可复制
                 LinearLayout.LayoutParams pkgParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
                 itemLayout.addView(pkgTv, pkgParams);
 
@@ -2849,6 +2849,7 @@ public class HookInit implements IXposedHookLoadPackage {
             excludeTitle.setPadding(30, 15, 30, 10);
             excludeTitle.setTextSize(13);
             excludeTitle.setTextColor(0xFFF44336);
+            excludeTitle.setTextIsSelectable(true); // 可复制
             packagesLayout.addView(excludeTitle);
 
             // 渲染排除包列表
@@ -2865,13 +2866,14 @@ public class HookInit implements IXposedHookLoadPackage {
                 pkgTv.setText((i + 1) + ". [排除] " + pkg); // 排除标签
                 pkgTv.setPadding(0, 5, 0, 5);
                 pkgTv.setTextSize(13);
-                pkgTv.setTextColor(0xFF9E9E9E); 
-                 // 锁定文本颜色，防止主题覆盖
+                pkgTv.setTextColor(0xFF9E9E9E);
+                // 锁定文本颜色，防止主题覆盖
                 pkgTv.setIncludeFontPadding(false);
                 pkgTv.setWillNotDraw(false);
                 pkgTv.setSingleLine(false);
                 pkgTv.setMaxLines(2);
                 pkgTv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                pkgTv.setTextIsSelectable(true); // 可复制
                 LinearLayout.LayoutParams pkgParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
                 itemLayout.addView(pkgTv, pkgParams);
 
@@ -2959,6 +2961,7 @@ public class HookInit implements IXposedHookLoadPackage {
             emptyTv.setPadding(30, 15, 30, 15);
             emptyTv.setTextColor(0xFF9E9E9E);
             emptyTv.setTextSize(12);
+            emptyTv.setTextIsSelectable(true); // 可复制
             packagesLayout.addView(emptyTv);
         }
     }
@@ -4270,6 +4273,7 @@ public class HookInit implements IXposedHookLoadPackage {
     }
 
 // 重载版本：支持自定义视图+HTML消息颜色
+    // 边界安全的对话框创建方法（支持自定义视图+HTML消息颜色）
     private AlertDialog createBoundedDialog(
             final Activity activity,
             String title,
@@ -4281,19 +4285,15 @@ public class HookInit implements IXposedHookLoadPackage {
         activity,
         AlertDialog.THEME_DEVICE_DEFAULT_LIGHT
         ).setTitle(title);
-        // 处理消息或自定义视图（支持HTML颜色）
         if (customView != null) {
-            // 使用自定义视图
             builder.setView(customView);
         } else if (message != null && !message.isEmpty()) {
-            // 支持HTML格式消息（用于颜色显示）
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 builder.setMessage(Html.fromHtml(message, Html.FROM_HTML_MODE_LEGACY));
             } else {
                 builder.setMessage(Html.fromHtml(message));
             }
         }
-        // 按钮配置
         if (buttonTexts.length >= 1 && listeners.length >= 1) {
             builder.setPositiveButton(buttonTexts[0], listeners[0]);
         }
@@ -4304,77 +4304,50 @@ public class HookInit implements IXposedHookLoadPackage {
             builder.setNeutralButton(buttonTexts[2], listeners[2]);
         }
         final AlertDialog dialog = builder.create();
-        // 设置对话框显示时的属性
-        dialog.setOnShowListener(
-                new DialogInterface.OnShowListener() {
-                    @Override
-                    public void onShow(DialogInterface dialogInterface) {
+        dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+            @Override
+            public void onShow(DialogInterface dialogInterface) {
+                try {
+                    Window window = dialog.getWindow();
+                    if (window != null) {
+                        WindowManager.LayoutParams params = window.getAttributes();
+                        params.flags |= WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+                        params.flags |= WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON;
+                        final DisplayMetrics metrics = new DisplayMetrics();
+                        activity.getWindowManager().getDefaultDisplay().getMetrics(metrics);
+                        if (customView != null) {
+                            params.width = WindowManager.LayoutParams.WRAP_CONTENT;
+                            params.height = WindowManager.LayoutParams.WRAP_CONTENT;
+                        } else {
+                            params.width = WindowManager.LayoutParams.MATCH_PARENT;
+                            params.height = WindowManager.LayoutParams.WRAP_CONTENT;
+                        }
+                        params.gravity = Gravity.CENTER;
+                        params.horizontalMargin = 0.25f;
+                        window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+                        params.dimAmount = 0.6f;
+                        window.setAttributes(params);
+                        window.getDecorView().bringToFront();
+                        activity.getWindow().getDecorView().bringToFront();
+                    }
+
+                    // ========== 新增：允许消息文本选择 ==========
+                    if (customView == null) {
                         try {
-                            Window window = dialog.getWindow();
-                            if (window != null) {
-                                WindowManager.LayoutParams params = window.getAttributes();
-                                // 基础层级提升
-                                params.flags |= WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
-                                params.flags |= WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON;
-                                // 位置和大小
-                                final DisplayMetrics metrics = new DisplayMetrics();
-                                activity
-                                        .getWindowManager()
-                                        .getDefaultDisplay()
-                                        .getMetrics(metrics);
-                                // 根据是否有自定义视图调整大小
-                                if (customView != null) {
-                                    // 自定义视图时使用包裹内容
-                                    params.width = WindowManager.LayoutParams.WRAP_CONTENT;
-                                    params.height = WindowManager.LayoutParams.WRAP_CONTENT;
-                                } else {
-                                    // 文本消息时使用MATCH_PARENT
-                                    params.width = WindowManager.LayoutParams.MATCH_PARENT;
-                                    params.height = WindowManager.LayoutParams.WRAP_CONTENT;
-                                }
-                                params.gravity = Gravity.CENTER;
-                                params.horizontalMargin = 0.25f; // 25%边距
-                                // 弱暗化
-                                window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-                                params.dimAmount = 0.6f; // 60%暗化，确保弹窗可见
-                                // 安全置顶
-                                window.setAttributes(params);
-                                window.getDecorView().bringToFront();
-                                activity.getWindow().getDecorView().bringToFront();
-                                // 对于自定义视图，可能需要额外处理
-                                if (customView != null) {
-                                    // 设置最大高度（避免超出屏幕）
-                                    final View contentView = window.findViewById(
-                                            android.R.id.content
-                                    );
-                                    if (contentView != null) {
-                                        contentView.post(
-                                                new Runnable() {
-                                                    @Override
-                                                    public void run() {
-                                                        int maxHeight = (metrics.heightPixels * 70) / 100; // 屏幕高度的70%
-                                                        if (contentView.getHeight() > maxHeight) {
-                                                            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                                                            LinearLayout.LayoutParams.MATCH_PARENT,
-                                                            maxHeight
-                                                            );
-                                                            contentView.setLayoutParams(lp);
-                                                        }
-                                                    }
-                                                }
-                                        );
-                                    }
-                                }
+                            TextView messageView = dialog.findViewById(android.R.id.message);
+                            if (messageView != null) {
+                                messageView.setTextIsSelectable(true);
                             }
-                        } catch (Throwable t) {
-                            log("设置对话框异常: " + t.getMessage());
-                            // 兜底：强制显示弹窗
-                            dialog.show();
+                        } catch (Throwable ignored) {
                         }
                     }
+
+                } catch (Throwable t) {
+                    log("设置对话框异常: " + t.getMessage());
+                    dialog.show(); // 兜底
                 }
-        );
-        // 允许外部点击关闭（但保留默认行为）
+            }
+        });
         dialog.setCanceledOnTouchOutside(true);
         dialog.setCancelable(true);
         return dialog;
@@ -4713,42 +4686,48 @@ public class HookInit implements IXposedHookLoadPackage {
                                             viewText.contains("关闭") ||
                                             viewText.contains("exit") ||
                                             viewText.contains("quit")) {
-                                        param.setResult(false);
-                                        //         log("✅ 通用拦截：退出按钮点击");
-                                        showSilentToast(activity, "已拦截退出");
+                        Boolean blockExit = blockExitMap.get(currentTargetApp);
+                                        if (blockExit != null && blockExit) {
+                                            param.setResult(false);
+                                            showSilentToast(activity, "已拦截退出");
+                                        }
                                     }
                                 }
                             }
                         }
                     }
             );
+            /*
+                        if (viewText.contains("退出") || viewText.contains("关闭") || ...) {
+
+            }
+                        */
 
             // 场景2：拦截带退出关键词的 Handler.post
             XposedHelpers.findAndHookMethod(
-                    "android.os.Handler",
-                    classLoader,
-                    "post",
-                    Runnable.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(
-                                XC_MethodHook.MethodHookParam param)
-                                throws Throwable {
-                            Runnable runnable = (Runnable) param.args[0];
-                            String runnableStr = runnable.toString().toLowerCase();
-                            if (runnableStr.contains("exit") ||
-                                    runnableStr.contains("kill") ||
-                                    runnableStr.contains("finish")) {
-                                DetectedPackages detected = analyzeDetectedPackages();
-                                if (!detected.installedPackages.isEmpty() ||
-                                        !detected.notInstalledPackages.isEmpty()) {
-                                    param.setResult(false);
-                                    //              log("✅ 通用拦截：退出逻辑 Runnable");
-                                }
-                            }
-                        }
+        "android.os.Handler",
+        classLoader,
+        "post",
+        Runnable.class,
+        new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                Boolean blockExit = blockExitMap.get(currentTargetApp);
+                if (blockExit == null || !blockExit) return; // ❗开关关闭则直接放行
+
+                Runnable runnable = (Runnable) param.args[0];
+                String runnableStr = runnable.toString().toLowerCase();
+                if (runnableStr.contains("exit") || runnableStr.contains("kill") || runnableStr.contains("finish")) {
+                    DetectedPackages detected = analyzeDetectedPackages();
+                    if (!detected.installedPackages.isEmpty() || !detected.notInstalledPackages.isEmpty()) {
+                        param.setResult(false);
+                        // 可选：增加提示
+                        // showSilentToast(getCurrentActivity(), "已拦截异步退出任务");
                     }
-            );
+                }
+            }
+        }
+);
 
             // 场景3：拦截Activity启动后直接退出
             XposedHelpers.findAndHookMethod(
@@ -4829,6 +4808,11 @@ public class HookInit implements IXposedHookLoadPackage {
                         protected void beforeHookedMethod(
                                 final XC_MethodHook.MethodHookParam param)
                                 throws Throwable {
+                        // 🚩 第一步：检查退出拦截开关
+                        Boolean blockExit = blockExitMap.get(currentTargetApp);
+                        if (blockExit == null || !blockExit) {
+                            return; // 开关关闭，完全放行
+                        }
                             // 检测当前应用是否有伪造包（有则开启拦截）
                             DetectedPackages detected = analyzeDetectedPackages();
                             if (detected.installedPackages.isEmpty() &&
@@ -6626,7 +6610,7 @@ private void hookGetPackageInfo(ClassLoader classLoader) {
                                 packageName.startsWith("com.bly.dkplat") || // 小X分身
                                 packageName.startsWith("dkplugin.") || // 小X分身分出的包名前缀
                                 packageName.startsWith("com.pengyou.cloneapp") || // 小X分身国际版/Clone
-                                                                                  // App
+                                // App
                                 packageName.startsWith("com.jy.x.separation.manager") || // 团团分身
                                 packageName.startsWith("com.dong.multirun") || // Multi Run
                                 packageName.startsWith("com.excelliance.dualaid") || // 双开助手
@@ -9990,7 +9974,7 @@ private boolean isValidPackageName(String str) {
         }
     }
 
-
+/*
 //启动应用：无过滤
     private void hookStartActivity(ClassLoader classLoader) {
         try {
@@ -10042,7 +10026,7 @@ private boolean isValidPackageName(String str) {
 
                                 // 步骤3：定义final变量（存储最终包名，后续不再修改）
                                 final String targetPkg = tempTargetPkg;
-                                final String realTargetPkg = targetPkg; 
+                                final String realTargetPkg = targetPkg;
                                 String curPkg = activity.getPackageName();
                                 if (TextUtils.equals(curPkg, targetPkg) || isExcludedPackage(targetPkg)) {
                                     return;
@@ -10054,12 +10038,13 @@ private boolean isValidPackageName(String str) {
 
                                 Boolean fakeStatus = installStatusMap.get(curPkg);
                                 final boolean isFakeInstalled = (fakeStatus != null ? fakeStatus : true);
-/*
+/*不启用
                                 if (!isFakeInstalled) {
                                     param.setThrowable(new ActivityNotFoundException("Not installed"));
                                     return;
                                 }
 */
+/*
                                 final PackageManager pm = activity.getPackageManager();
                                 final boolean isBrowser = isBrowserFromIntent(intent, pm);
                                 final boolean isReallyInstalled = isPackageReallyInstalled(targetPkg); // 用final包名判断安装状态
@@ -10082,31 +10067,31 @@ private boolean isValidPackageName(String str) {
                                                         return;
                                                     String displayName;
                                                     if (!TextUtils.isEmpty(targetPkg)) {
-                                                        displayName = targetPkg; 
+                                                        displayName = targetPkg;
                                                     } else {
                                                         displayName = "外部链接";
                                                     }
                                                     String pkgTip = isReallyInstalled ? displayName : displayName + "（未安装）";
 
-                                                    String browserTip = isBrowser ? "<br><font color='#FF5722'>（检测到跳转浏览器浏览，可选择虚假启动屏蔽）</font>" : "";
+                                                    String browserTip = isBrowser ? "<br><b>(<font color='#FF5722'>检测到跳转浏览器</font>，<font color='#1E90FF'>可选择虚假启动屏蔽</font>)</b>" : "";
                                                     String msg = "当前应用想要打开<br><font color='#FF5722'><b>" + pkgTip + "</b></font>" + browserTip + "<br><br>" +
-                                                            "————————————————<br>" +
+                                                            "—————————————————<br>" +
                                                             "【虚假启动】不需要启动跳转到应用，返回伪造已启动<br>" +
                                                             "【真实启动】真正的打开想要的应用，按宿主要求执行<br>" +
                                                             "【取消启动】阻止跳转到第三方应用，可能会重复提醒<br>" +
-                                                            "————————————————<br>";
+                                                            "—————————————————<br>";
 
                                                     String[] buttons;
                                                     DialogInterface.OnClickListener[] listeners;
 
                                                     if (oriIntent.getData() != null || oriIntent.getAction() != null &&
                                                                     (oriIntent.getAction().equals(Intent.ACTION_OPEN_DOCUMENT) || oriIntent.getAction().equals(Intent.ACTION_SEND))) {
-                                                        msg += "<font color='#666'>检测到启动的应用中包含参数跳转请求</font><br>" +
-                                                                "<font color='#F44336'>虚假:伪造参数返回/真实:附带参数跳转</font><br>";
+                                                        msg += "<font color='#1E90FF'>检测到启动的应用中包含参数跳转请求</font><br>" +
+                                                                "<font color='#FF5722'>虚假:</font><font color='#1E90FF'>伪造参数返回</font>/<font color='#FF5722'>真实:</font><font color='#1E90FF'>附带参数跳转</font><br>";
                                                     }
                                                     if (isReallyInstalled) {
                                                         // 已安装：真实打开 + 虚假启动 + 取消
-                                                        msg += "<br><font color='#F44336'>选择虚假启动部分应用需回到桌面再回来才“刷新/解除”</font>" +
+                                                        msg += "<b><br><font color='#D3D3D3'>选择虚假启动部分应用需回到桌面再回来才“刷新/解除”</font></b>" +
                                                         "<br>请选择启动方式：";
                                                         buttons = new String
                                                                 []{"真实启动", "虚假启动", "取消启动"};
@@ -10183,6 +10168,8 @@ private boolean isValidPackageName(String str) {
                                                         };
                                                     } else {
                                                         // 真实未安装 → 2个按钮（虚假+取消）
+                                                        msg += "<b><br><font color='#D3D3D3'>选择虚假启动部分应用需回到桌面再回来才“刷新/解除”</font></b>" +
+                                                        "<br>请选择启动方式：";
                                                         buttons = new String[]{"虚假启动", "取消启动"};
                                                         listeners = new DialogInterface.OnClickListener
                                                                 []{
@@ -10247,54 +10234,338 @@ private boolean isValidPackageName(String str) {
         } catch (Throwable e) {
         }
     }
+*/
 
+// 全局拦截启动第三方
+    private void hookStartActivity(ClassLoader classLoader) {
+        try {
+            Class<
+                    ?> instrumentationClass = XposedHelpers.findClass("android.app.Instrumentation", classLoader);
+            XposedBridge.hookAllMethods(instrumentationClass, "execStartActivity", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    handleExecStartActivity(param);
+                }
+            });
+            log("✅ 已Hook所有 execStartActivity 重载");
+        } catch (Throwable t) {
+            log("❌ Hook Instrumentation 失败: " + t.getMessage());
+        }
+    }
+
+// 拦截启动第三方细分过滤
+    private void handleExecStartActivity(XC_MethodHook.MethodHookParam param) {
+        try {
+            // 从参数中查找 Intent 和 Activity
+            Intent intent = null;
+            Activity activity = null;
+            int requestCode = -1;
+
+            for (Object arg : param.args) {
+                if (arg instanceof Intent) {
+                    intent = (Intent) arg;
+                } else if (arg instanceof Activity) {
+                    activity = (Activity) arg;
+                } else if (arg instanceof Integer && requestCode == -1) {
+                    requestCode = (int) arg;
+                }
+            }
+
+            if (intent == null) return;
+
+            // 防递归
+            if (intent.hasExtra("__hook_skip_flag")) return;
+
+            // 当前应用包名
+            String currentPkg = currentTargetApp;
+
+            // 提取目标包名
+            String targetPkg = extractPackageFromIntent(intent);
+            // 如果从Intent中未提取到包名，尝试从market链接中提取
+            if (targetPkg == null && intent.getData() != null) {
+                Uri data = intent.getData();
+                String scheme = data.getScheme();
+                if ("market".equals(scheme) || "appmarket".equals(scheme)) {
+                    targetPkg = data.getQueryParameter("id");
+                }
+            }
+
+            // ========== 过滤系统权限/设置请求 ==========
+// 已知的系统权限包名（可根据需要补充）
+            String[] systemPermissionPackages = {
+                    "com.android.permissioncontroller",
+                    "com.android.packageinstaller",
+                    "com.google.android.packageinstaller",
+                    "com.android.settings",
+                    "com.google.android.permissioncontroller"
+            };
+            if (targetPkg != null) {
+                for (String sysPkg : systemPermissionPackages) {
+                    if (sysPkg.equals(targetPkg)) {
+                        return; // 放行已知的系统权限包
+                    }
+                }
+            }
+// 检查 Intent 的 Action 是否为权限/设置请求（覆盖更多系统页面）
+            String action = intent.getAction();
+            if (action != null && (action.startsWith("android.settings.") ||
+                            "android.intent.action.REQUEST_PERMISSIONS".equals(action))) {
+                return; // 放行系统设置页面和标准权限请求
+            }
+// ========== 过滤结束 ==========
+
+            // 如果是当前应用或排除包，放行
+            if (targetPkg != null && (targetPkg.equals(currentPkg) || isExcludedPackage(targetPkg))) {
+                return;
+            }
+
+            // 判断是否为隐式 Intent（无明确目标）
+            boolean isImplicit = (targetPkg == null && intent.getComponent() == null && intent.getPackage() == null);
+            if (!isImplicit && targetPkg == null) {
+                // 不是隐式但也没有包名，可能是其他特殊情况，放行
+                return;
+            }
+
+            // 如果包名为空，后续显示“外部链接”或链接信息
+            final String finalTargetPkg = (targetPkg != null) ? targetPkg : "";
+
+            // 阻断原执行
+            param.setResult(null);
+
+            // 获取当前 Activity
+            final Activity finalActivity = (activity != null) ? activity : getCurrentActivity();
+            if (finalActivity == null || finalActivity.isFinishing()) return;
+
+            final int finalRequestCode = requestCode;
+            final Intent originalIntent = new Intent(intent); // 保留原始 Intent
+
+            // 检查真实安装状态（仅当包名非空时才有意义）
+            final boolean reallyInstalled = !TextUtils.isEmpty(targetPkg) && isPackageReallyInstalled(targetPkg);
+
+            // 在 UI 线程显示弹窗
+            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                        @Override
+                        public void run() {
+                            showLaunchConfirmDialog(finalActivity, originalIntent, finalTargetPkg, finalRequestCode, reallyInstalled);
+                        }
+                    });
+
+        } catch (Throwable t) {
+            log("handleExecStartActivity 异常: " + t.getMessage());
+        }
+    }
+
+// 显示启动拦截弹窗
+    private void showLaunchConfirmDialog(final Activity activity, final Intent originalIntent,
+            final String targetPkg, final int requestCode,
+            final boolean reallyInstalled) {
+        try {
+            if (activity.isFinishing() || activity.isDestroyed()) return;
+
+            // ========== 构建显示名称 ==========
+            final String displayName;
+            if (!TextUtils.isEmpty(targetPkg)) {
+                displayName = targetPkg;
+            } else {
+                Uri uri = originalIntent.getData();
+                /*
+                //显示主域名
+                if (uri != null) {
+                    String host = uri.getHost();
+                    if (!TextUtils.isEmpty(host)) {
+                        displayName = host;
+                    } else {
+                        String uriString = uri.toString();
+                        displayName = uriString.length() > 100 ? uriString.substring(0, 97) + "..." : uriString;
+                    }
+                } else {
+                    displayName = "外部链接";
+                }
+                */
+                // 显示120字符以内网址-防止过长
+                if (uri != null) {
+                    String uriString = uri.toString();
+                    displayName = uriString.length() > 120 ? uriString.substring(0, 117) + "..." : uriString;
+                } else {
+                    displayName = "外部链接";
+                }
+            }
+            String pkgTip = reallyInstalled ? displayName : displayName + (TextUtils.isEmpty(targetPkg) ? "" : "（未安装）");
+
+            // 判断是否为浏览器
+            boolean isBrowser = isBrowserFromIntent(originalIntent, activity.getPackageManager());
+            String browserTip = isBrowser ? "<br><b>(<font color='#FF5722'>检测到跳转浏览器</font>，<font color='#1E90FF'>可选择虚假启动屏蔽</font>)</b>" : "";
+
+            // 构建消息（保持原风格）
+            String msg = "当前应用想要打开<br><font color='#FF5722'><b>" + pkgTip + "</b></font>" + browserTip + "<br><br>" +
+                    "—————————————————<br>" +
+                    "【虚假启动】不需要启动跳转到应用，返回伪造已启动<br>" +
+                    "【真实启动】真正的打开想要的应用，按宿主要求执行<br>" +
+                    "【取消启动】阻止跳转到第三方应用，可能会重复提醒<br>" +
+                    "—————————————————<br>";
+
+            if (originalIntent.getData() != null || (originalIntent.getAction() != null &&
+                            (originalIntent.getAction().equals(Intent.ACTION_OPEN_DOCUMENT) ||
+                                    originalIntent.getAction().equals(Intent.ACTION_SEND)))) {
+                msg +=
+                        "<font color='#1E90FF'>检测到启动的应用中包含参数跳转请求</font><br>" +
+                                "<font color='#FF5722'>虚假:</font><font color='#1E90FF'>伪造参数返回</font>/<font color='#FF5722'>真实:</font><font color='#1E90FF'>附带参数跳转</font><br>";
+            }
+            // 只要 Intent 可被解析（即有数据或动作），就提供真实启动按钮
+            boolean canResolve = (originalIntent.getData() != null) || (originalIntent.getAction() != null);
+            if (canResolve) {
+                // 三个按钮：真实启动、虚假启动、取消启动
+                msg +=
+                        "<b><br><font color='#D3D3D3'>选择虚假启动部分应用需回到桌面再回来才“刷新/解除 - 如有误拦截包名请双击悬浮窗添加排除”</font></b>" +
+                                "<br>请选择启动方式：";
+
+                String[] buttons = new String[]{"真实启动", "虚假启动", "取消启动"};
+                DialogInterface.OnClickListener[] listeners = new DialogInterface.OnClickListener[]{
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                // 真实启动
+                                try {
+                                    Intent launchIntent;
+                                    if (TextUtils.isEmpty(targetPkg)) {
+                                        // 包名为空：直接使用原始 Intent（隐式），并添加防递归标记
+                                        launchIntent = new Intent(originalIntent);
+                                        launchIntent.putExtra("__hook_skip_flag", true);
+                                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                        if (originalIntent.getData() != null) {
+                                            launchIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                        }
+                                    } else {
+                                        // 有包名：使用 buildLaunchIntent（保留原逻辑）
+                                        launchIntent = buildLaunchIntent(activity, originalIntent, targetPkg, true);
+                                    }
+                                    activity.startActivity(launchIntent);
+                                    Toast.makeText(activity, "✅ 已启动：" + displayName, Toast.LENGTH_SHORT).show();
+                                    refreshAppToForeground(activity);
+                                } catch (ActivityNotFoundException e) {
+                                    // 兜底尝试无参启动（仅当有包名时）
+                                    if (!TextUtils.isEmpty(targetPkg)) {
+                                        try {
+                                            Intent launchIntent = buildLaunchIntent(activity, originalIntent, targetPkg, false);
+                                            List<
+                                                    ResolveInfo> resolveList = activity.getPackageManager()
+                                                    .queryIntentActivities(launchIntent, 0);
+                                            if (resolveList != null && !resolveList.isEmpty()) {
+                                                activity.startActivity(launchIntent);
+                                                Toast.makeText(activity, "✅ 启动主页：" + targetPkg, Toast.LENGTH_SHORT).show();
+                                                refreshAppToForeground(activity);
+                                                return;
+                                            }
+                                        } catch (Exception fallbackE) {
+                                            // 忽略
+                                        }
+                                    }
+                                    Toast.makeText(activity, "启动失败：无法处理该跳转", Toast.LENGTH_LONG).show();
+                                } catch (Exception e) {
+                                    Toast.makeText(activity, "启动异常：" + e.getMessage(), Toast.LENGTH_LONG).show();
+                                }
+                            }
+                        },
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                // 虚假启动
+                                try {
+                                    if (requestCode > 0) {
+                                        callOnActivityResult(activity, requestCode, Activity.RESULT_OK, new Intent());
+                                    }
+                                    Toast.makeText(activity, "✅ 已伪造启动" + displayName, Toast.LENGTH_SHORT).show();
+                                    refreshAppToForeground(activity);
+                                } catch (Throwable e) {
+                                    Toast.makeText(activity, "伪造失败", Toast.LENGTH_SHORT).show();
+                                }
+                            }
+                        },
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                // 取消启动
+                                try {
+                                    if (requestCode > 0) {
+                                        callOnActivityResult(activity, requestCode, Activity.RESULT_CANCELED, originalIntent);
+                                    }
+                                    Toast.makeText(activity, "已取消启动" + displayName, Toast.LENGTH_SHORT).show();
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                        }
+                };
+                AlertDialog dialog = createBoundedDialog(activity, "启动确认", msg, buttons, listeners);
+                dialog.setOnCancelListener(new DialogInterface.OnCancelListener() {
+                    @Override
+                    public void onCancel(DialogInterface dialog) {
+                        if (requestCode > 0) {
+                            callOnActivityResult(activity, requestCode, Activity.RESULT_CANCELED, originalIntent);
+                        }
+                    }
+                });
+                dialog.show();
+
+            } else {
+                // 无法解析的 Intent，只提供虚假/取消（与原来一致）
+                msg +=
+                        "<b><br><font color='#D3D3D3'>选择虚假启动部分应用需回到桌面再回来才“刷新/解除 - 如有误拦截包名请双击悬浮窗添加排除”</font></b>" +
+                                "<br>请选择启动方式：";
+
+                String[] buttons = new String[]{"虚假启动", "取消启动"};
+                DialogInterface.OnClickListener[] listeners = new DialogInterface.OnClickListener[]{
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                try {
+                                    if (requestCode > 0) {
+                                        callOnActivityResult(activity, requestCode, Activity.RESULT_OK, new Intent());
+                                    }
+                                    Toast.makeText(activity, "✅ 已伪造启动" + displayName, Toast.LENGTH_SHORT).show();
+                                    refreshAppToForeground(activity);
+                                } catch (Throwable e) {
+                                    Toast.makeText(activity, "伪造失败", Toast.LENGTH_SHORT).show();
+                                }
+                            }
+                        },
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                try {
+                                    if (requestCode > 0) {
+                                        callOnActivityResult(activity, requestCode, Activity.RESULT_CANCELED, originalIntent);
+                                    }
+                                    Toast.makeText(activity, "已取消启动" + displayName, Toast.LENGTH_SHORT).show();
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                        }
+                };
+                AlertDialog dialog = createBoundedDialog(activity, "启动确认", msg, buttons, listeners);
+                dialog.setOnCancelListener(new DialogInterface.OnCancelListener() {
+                    @Override
+                    public void onCancel(DialogInterface dialog) {
+                        if (requestCode > 0) {
+                            callOnActivityResult(activity, requestCode, Activity.RESULT_CANCELED, originalIntent);
+                        }
+                    }
+                });
+                dialog.show();
+            }
+
+        } catch (Throwable t) {
+            log("显示启动确认 异常: " + t.getMessage());
+        }
+    }
 
 /*
  //独立构建启动Intent（终极修复：无参兜底全新创建Intent，彻底清除所有参数）
-private Intent buildLaunchIntent(Activity activity, Intent oriIntent, String pkg, boolean needParams) {
-    // 1. 强制优先使用系统提供的标准启动 Intent，完全忽略 oriIntent
-    PackageManager pm = activity.getPackageManager();
-    Intent systemLaunchIntent = pm.getLaunchIntentForPackage(pkg);
-
-    if (systemLaunchIntent != null) {
-        // 只添加防递归标记和必要的 Flag
-        systemLaunchIntent.putExtra("__hook_skip_flag", true);
-        systemLaunchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-
-        // 2. 如果需要带参，只透传数据，绝不透传 Component
-        if (needParams && oriIntent != null) {
-            if (oriIntent.getExtras() != null) {
-                systemLaunchIntent.putExtras(oriIntent.getExtras());
-            }
-            if (oriIntent.getData() != null) {
-                systemLaunchIntent.setData(oriIntent.getData());
-                systemLaunchIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            }
-        }
-        // 关键：确保最终返回的 Intent 没有任何 Component 信息
-        systemLaunchIntent.setComponent(null);
-        return systemLaunchIntent;
-    }
-
-    // 3. 兜底方案：创建一个全新的 Intent，完全不依赖 oriIntent
-    Intent finalFallback = new Intent(Intent.ACTION_MAIN);
-    finalFallback.setPackage(pkg); // 只指定包名
-    finalFallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-    finalFallback.putExtra("__hook_skip_flag", true);
-    finalFallback.setComponent(null); // 确保没有 Component
-
-    if (needParams && oriIntent != null) {
-        if (oriIntent.getExtras() != null) {
-            finalFallback.putExtras(oriIntent.getExtras());
-        }
-    }
-    return finalFallback;
-}
-
 */
-// ==========================================
-// 文档同款：双方案启动封装（带参+无参兜底）
-// ==========================================
     private Intent buildLaunchIntent(Activity activity, Intent oriIntent, String pkg, boolean needParams) {
         if (needParams && oriIntent != null) {
             // 方案1：带参启动（优先）- 透传原始参数+文件权限
@@ -10331,7 +10602,7 @@ private Intent buildLaunchIntent(Activity activity, Intent oriIntent, String pkg
             method.invoke(activity, requestCode, resultCode, data);
         } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
             // 异常不崩溃
-          //  log("调用onActivityResult失败：" + e.getMessage());
+            //  log("调用onActivityResult失败：" + e.getMessage());
         }
     }
 
@@ -10352,7 +10623,7 @@ private Intent buildLaunchIntent(Activity activity, Intent oriIntent, String pkg
         } catch (PackageManager.NameNotFoundException e) {
             return false;
         } catch (Throwable t) {
-          //  log("查询真实安装状态失败[" + packageName + "]：" + t.getMessage());
+            //  log("查询真实安装状态失败[" + packageName + "]：" + t.getMessage());
             return false;
         }
     }
@@ -10398,10 +10669,9 @@ private Intent buildLaunchIntent(Activity activity, Intent oriIntent, String pkg
                 }
             });
         } catch (Throwable e) {
-           // log("应用前台刷新失败：" + e.getMessage());
+            // log("应用前台刷新失败：" + e.getMessage());
         }
     }
-
 
     // ========== 辅助工具方法 ==========
     private boolean isDetectionUrl(String url) {
