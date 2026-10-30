@@ -28,7 +28,7 @@
 - 绕过限制：突破“必须安装指定 APP”的强制要求
 - 环境检测：规避应用的环境/网络状态检测
 - 便捷使用：支持 LSPatch 非 ROOT 方案
-- 整治跳转：拦截应用间恶意唤起和网页强制重定向
+- 整治跳转：拦截恶意间唤起应用和网页跳转
 - 限制破除：解除截屏/录屏限制和界面锁定
 <img alt="安装防护模块7" src="https://github.com/user-attachments/assets/113f412f-65c8-4c33-8a49-40b1e92e519b" />
 <img alt="安装防护模块8" src="https://github.com/user-attachments/assets/78fbf8c9-b75d-4276-882d-d35a6c88d86f" />
@@ -61,7 +61,7 @@
 | **捕获包名** | 目标应用查询包时同步捕获并列出相应包名，便于预配置规则。 |
 | **配置文件** | 悬浮窗位置、拦截状态、设置模式等自动持久化，重启不丢失。 |
 | **配置导出** | 路径：`/storage/emulated/0/Android/data/目标包名/files/installcf_包名_时间戳.json` |
-| **配置导入** | 新文件需在`/storage/emulated/0/Android/data/目标包名/files/`路径下才能识别，暂不支持使用文件选择器。 |
+| **配置导入** | 新文件默认在`/storage/emulated/0/Android/data/目标包名/files/`路径下才能识别，暂也可使用文件选择器外部文件。 |
 >配置导入导出支持个性化配置（注：不支持导出含自动捕获的包名）
 <img alt="安装防护模块5" src="https://github.com/user-attachments/assets/e4143932-0b70-4f18-9eb8-5c486a86f48e" />
 
@@ -138,8 +138,8 @@
 - 🚫 加固应用**可能无效**，请取消作用域
 - 📱 无响应/失效：清理包缓存 → 重启应用/设备
 - 📁 配置文件路径：默认创建在`/data/data/目标包名/files/installcf_包名.json`
-- 📁 导出配置文件：`/storage/emulated/0/Android/data/目标包名/files/installcf_包名_时间戳.json`
-
+- 📁 导出配置文件：默认在`/storage/emulated/0/Android/data/目标包名/files/installcf_包名_时间戳.json`
+> 📁 导入导出亦可使用`系统文件选择器`
 ---
 
 ## ❓ 常见问题
