@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	
+    <string-array name="xposed_scope">
+        <!--<item>package_name</item>-->
+        <item>com.xl.appazcs</item>
+    </string-array>
+	
+</resources>
